@@ -16,6 +16,7 @@ from app.tasks import send_status_update_notification
 
 admin_bp = Blueprint('admin', __name__)
 
+@admin_bp.route('')
 @admin_bp.route('/')
 @admin_required
 def admin_root():
