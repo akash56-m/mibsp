@@ -116,6 +116,26 @@ For production installs, use HTTPS and a real domain.
 
 **⚠️ Change these immediately after first login!**
 
+### Seed Demo Complaints
+
+Run from project root after `python deploy/bootstrap.py`:
+
+```bash
+# 120 complaints (recommended for charts and heatmap testing)
+python seed.py --target-range medium --clear-existing-complaints
+
+# 150 complaints
+python seed.py --target-range large --clear-existing-complaints
+
+# Custom complaint count (1-500)
+python seed.py --complaints 140 --clear-existing-complaints
+```
+
+Notes:
+- `--target-range compact` = 20
+- `--target-range medium` = 120
+- `--target-range large` = 150
+
 ## 🖥️ VPS Deployment (Production)
 
 ### Requirements

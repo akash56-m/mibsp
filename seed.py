@@ -134,9 +134,7 @@ def seed_services(departments):
                 )
                 db.session.add(service)
                 print(f"  Created service: {service_name} ({dept.name})")
-                services.append(service)
-            else:
-                services.append(existing)
+            services.append(existing or service)
     
     db.session.commit()
     return services
@@ -187,7 +185,7 @@ def seed_users(departments):
     return users_created
 
 
-def seed_complaints(departments, services):
+def seed_complaints(departments, services, count=20):
     """Create sample complaints."""
     sample_descriptions = [
         "Water supply has been irregular for the past week. We are facing severe shortage.",
@@ -213,14 +211,13 @@ def seed_complaints(departments, services):
     officers = User.query.filter_by(role='officer').all()
     complaints_created = []
     
-    # Create 20 sample complaints
-    for i in range(20):
+    for _ in range(count):
         dept = random.choice(departments)
         dept_services = [s for s in services if s.department_id == dept.id]
         service = random.choice(dept_services) if dept_services else None
         
         # Generate random dates within last 3 months
-        days_ago = random.randint(1, 90)
+        days_ago = random.randint(1, 120)
         submitted_at = datetime.utcnow() - timedelta(days=days_ago)
         
         # Determine status
@@ -232,7 +229,7 @@ def seed_complaints(departments, services):
 
         # Create complaint
         complaint = Complaint(
-            tracking_id=f'MIB{random.randint(10000000, 99999999)}',
+            tracking_id=generate_tracking_id(),
             service_id=service.id if service else None,
             department_id=dept.id,
             description=random.choice(sample_descriptions),
@@ -343,17 +340,79 @@ def print_summary(users, complaints):
     print("="*60)
 
 
+def _parse_complaint_count(raw_value):
+    """Parse CLI complaint count with safe bounds."""
+    if raw_value is None:
+        return 20
+
+    try:
+        count = int(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError('complaint count must be an integer.')
+
+    if count < 1:
+        raise ValueError('complaint count must be at least 1.')
+    if count > 500:
+        raise ValueError('complaint count must be 500 or below for seeding safety.')
+
+    return count
+
+
 def main():
     """Main seeding function."""
+    parser = argparse.ArgumentParser(description='Seed initial MIBSP data for development/testing.')
+    parser.add_argument(
+        '--complaints',
+        type=int,
+        default=None,
+        help='Number of demo complaints to generate. Takes precedence over --target-range.'
+    )
+    parser.add_argument(
+        '--target-range',
+        choices=['compact', 'medium', 'large'],
+        default='compact',
+        help='Preset complaint count: compact=20, medium=120, large=150.'
+    )
+    parser.add_argument(
+        '--clear-existing-complaints',
+        action='store_true',
+        help='Delete existing complaints before generating new ones.'
+    )
+    parser.add_argument(
+        '--seed-audit-logs',
+        action='store_true',
+        help='Create sample audit logs after seeding complaints.'
+    )
+    args = parser.parse_args()
+
     print("\n" + "="*60)
     print("  MIBSP Database Seeder")
     print("="*60 + "\n")
+
+    target_count = {
+        'compact': 20,
+        'medium': 120,
+        'large': 150
+    }.get(args.target_range, 20)
+
+    if args.complaints is not None:
+        try:
+            complaint_count = _parse_complaint_count(args.complaints)
+        except ValueError as exc:
+            raise SystemExit(f"Error: {exc}")
+    else:
+        complaint_count = target_count
     
     # Create app context
     env = os.environ.get('FLASK_ENV', 'development')
     app = create_app(env)
     
     with app.app_context():
+        if args.clear_existing_complaints:
+            deleted = Complaint.query.delete()
+            db.session.commit()
+            print(f"Cleared {deleted} existing complaints.")
+
         print("Creating departments...")
         departments = seed_departments()
         
@@ -364,11 +423,14 @@ def main():
         users = seed_users(departments)
         
         print("\nCreating complaints...")
-        complaints = seed_complaints(departments, services)
+        complaints = seed_complaints(departments, services, count=complaint_count)
         
         print("\nCreating audit logs...")
-        all_users = User.query.all()
-        seed_audit_logs(all_users)
+        if args.seed_audit_logs:
+            all_users = User.query.all()
+            seed_audit_logs(all_users)
+        else:
+            print("  Skipping audit logs. Use --seed-audit-logs to include.")
         
         print_summary(users, complaints)
 
