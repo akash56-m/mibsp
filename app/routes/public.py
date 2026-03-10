@@ -396,6 +396,12 @@ def geo_heatmap():
     return render_template('public/geo_heatmap.html', stats=stats)
 
 
+@public_bp.route('/public/geo-heatmap')
+def geo_heatmap_legacy():
+    """Backward-compatible path for older deep links."""
+    return redirect(url_for('public.geo_heatmap'))
+
+
 # =============================================================================
 # COMPLAINT SUBMISSION
 # =============================================================================
@@ -673,6 +679,12 @@ def public_dashboard():
                           worst_department=worst_department,
                           recent_complaints=recent_complaints,
                           status_options=DASHBOARD_STATUSES)
+
+
+@public_bp.route('/public/dashboard')
+def public_dashboard_legacy():
+    """Backward-compatible path for older deep links."""
+    return redirect(url_for('public.public_dashboard'))
 
 
 # =============================================================================
