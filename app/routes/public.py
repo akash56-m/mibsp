@@ -948,10 +948,16 @@ def export_monthly_csv():
 def get_geo_heatmap_data():
     """Return geo-tagged complaint points for heatmap rendering."""
     maybe_run_sla_escalations()
+    requested_limit = request.args.get('limit', type=int)
+    max_points = int(current_app.config.get('GEO_HEATMAP_MAX_POINTS', 2500))
+    if requested_limit is None or requested_limit <= 0:
+        requested_limit = max_points
+    requested_limit = min(requested_limit, max_points * 2)
+
     complaints = Complaint.query.filter(
         Complaint.location_lat.isnot(None),
         Complaint.location_lng.isnot(None)
-    ).all()
+    ).order_by(Complaint.submitted_at.desc()).limit(requested_limit).all()
     return jsonify([
         {
             'lat': complaint.location_lat,

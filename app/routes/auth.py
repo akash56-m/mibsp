@@ -17,6 +17,11 @@ from app.tasks import send_system_email
 auth_bp = Blueprint('auth', __name__)
 
 
+def _resolve_next_target():
+    """Read postback-safe redirect target from query string or form body."""
+    return (request.form.get('next') or request.args.get('next') or '').strip()
+
+
 def _is_safe_redirect(target):
     """Allow redirects only to same-host URLs."""
     if not target:
@@ -59,13 +64,16 @@ def login():
         else:
             return redirect(url_for('officer.dashboard'))
     
+    next_page = _resolve_next_target()
+
     if request.method == 'POST':
+        _clear_pending_otp()
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         
         if not username or not password:
             flash('Please enter both username and password.', 'warning')
-            return render_template('auth/login.html')
+            return render_template('auth/login.html', next=next_page)
         
         # Find user
         user = User.query.filter_by(username=username).first()
@@ -76,21 +84,19 @@ def login():
                 'LOGIN_BLOCKED_LOCKED',
                 details={'username': username}
             )
-            return render_template('auth/login.html')
+            return render_template('auth/login.html', next=next_page)
         
         if user and user.check_password(password):
             if not user.is_active:
                 flash('Your account has been deactivated. Contact an administrator.', 'danger')
                 log_action('LOGIN_FAILED_INACTIVE', 
                           details={'username': username}, user=user)
-                return render_template('auth/login.html')
-
-            next_page = request.args.get('next')
+                return render_template('auth/login.html', next=next_page)
 
             if user.is_admin() and current_app.config.get('ADMIN_EMAIL_2FA_ENABLED', False):
                 if not user.email:
                     flash('Admin account email is required for OTP verification.', 'danger')
-                    return render_template('auth/login.html')
+                    return render_template('auth/login.html', next=next_page)
 
                 otp_length = int(current_app.config.get('ADMIN_OTP_LENGTH', 6))
                 otp_expiry_minutes = int(current_app.config.get('ADMIN_OTP_EXPIRY_MINUTES', 5))
@@ -102,10 +108,18 @@ def login():
                     f'Your OTP for MIBSP admin login is: {otp_code}\n'
                     f'This code expires in {otp_expiry_minutes} minutes.'
                 )
-                sent, _ = send_system_email(subject, body, [user.email])
+                sent, send_error = send_system_email(subject, body, [user.email])
                 if not sent:
-                    flash('Unable to send OTP email right now. Please try again.', 'danger')
-                    return render_template('auth/login.html')
+                    log_action('LOGIN_2FA_MAIL_FAILED', details={
+                        'username': username,
+                        'error': send_error or 'unknown'
+                    }, user=user)
+                    flash(
+                        'Unable to send OTP email right now. '
+                        'Verify MAIL settings and retry, or ask an admin to disable ADMIN_EMAIL_2FA_ENABLED.',
+                        'danger'
+                    )
+                    return render_template('auth/login.html', next=next_page)
 
                 _clear_pending_otp()
                 session['pending_otp_user_id'] = user.id
@@ -149,8 +163,8 @@ def login():
                 flash('Too many failed attempts. Account locked for 15 minutes.', 'danger')
             else:
                 flash('Invalid username or password.', 'danger')
-    
-    return render_template('auth/login.html')
+
+    return render_template('auth/login.html', next=next_page)
 
 
 @auth_bp.route('/verify-otp', methods=['GET', 'POST'])

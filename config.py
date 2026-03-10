@@ -35,6 +35,9 @@ class Config:
     SESSION_COOKIE_SECURE = False  # Override in production
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
+
+    # Geo heatmap performance guard (API limit before progressive rendering)
+    GEO_HEATMAP_MAX_POINTS = int(os.environ.get('GEO_HEATMAP_MAX_POINTS', 2500))
     
     # CSRF
     WTF_CSRF_ENABLED = True

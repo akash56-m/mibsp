@@ -1,0 +1,600 @@
+{% extends 'base.html' %}
+
+{% block title %}Geo Heatmap{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+{% endblock %}
+
+{% block content %}
+<section class="py-5 bg-light geo-heatmap-shell mobile-data-page">
+    <div class="container">
+        <nav aria-label="breadcrumb" class="mb-4">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('public.index') }}">Home</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('public.public_dashboard') }}">Public Dashboard</a></li>
+                <li class="breadcrumb-item active">Geo Heatmap</li>
+            </ol>
+        </nav>
+
+        <div class="card shadow-sm border-0 geo-heatmap-hero mb-4">
+            <div class="card-body p-4 p-lg-5">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                    <div>
+                        <h2 class="fw-bold mb-2"><i class="fas fa-map-location-dot me-2"></i>Complaint Geo Heatmap</h2>
+                        <p class="mb-3 text-muted">Visualize complaint density, urgency hotspots, and regional trends from geo-tagged submissions.</p>
+                        <div class="geo-hero-pills">
+                            <span class="geo-hero-pill">Total <strong>{{ stats.total }}</strong></span>
+                            <span class="geo-hero-pill text-danger">High Priority <strong>{{ stats.high_priority }}</strong></span>
+                            <span class="geo-hero-pill text-danger">Delayed <strong>{{ stats.delayed }}</strong></span>
+                            <span class="geo-hero-pill text-success">SLA <strong>{{ stats.sla_compliance }}%</strong></span>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a href="{{ url_for('public.public_dashboard') }}" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-chart-line me-1"></i>Back to Dashboard
+                        </a>
+                        <button type="button" class="btn btn-primary btn-sm" id="refreshMapBtn">
+                            <i class="fas fa-rotate me-1"></i>Refresh Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-xl-9">
+                <div class="card shadow-sm border-0">
+                    <div class="card-body border-bottom">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                            <h6 class="mb-0"><i class="fas fa-sliders me-2 text-primary"></i>Map Controls</h6>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="resetFiltersBtn">
+                                <i class="fas fa-filter-circle-xmark me-1"></i>Reset Filters
+                            </button>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">Status</label>
+                                <select class="form-select" id="statusFilter">
+                                    <option value="all">All Statuses</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="Under Review">Under Review</option>
+                                    <option value="Action Taken">Action Taken</option>
+                                    <option value="Delayed">Delayed</option>
+                                    <option value="Reopened">Reopened</option>
+                                    <option value="Closed">Closed</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">Priority</label>
+                                <select class="form-select" id="priorityFilter">
+                                    <option value="all">All Priorities</option>
+                                    <option value="High">High</option>
+                                    <option value="Normal">Normal</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">Layer Mode</label>
+                                <select class="form-select" id="layerModeFilter">
+                                    <option value="heat">Heatmap</option>
+                                    <option value="markers">Markers</option>
+                                    <option value="both">Heatmap + Markers</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">State</label>
+                                <select class="form-select" id="stateFilter">
+                                    <option value="all">All States</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">District</label>
+                                <select class="form-select" id="districtFilter">
+                                    <option value="all">All Districts</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 col-lg-4">
+                                <label class="form-label small fw-semibold">City</label>
+                                <select class="form-select" id="cityFilter">
+                                    <option value="all">All Cities</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="small text-muted mb-0 mt-3" id="activeFilterSummary">Showing all geo-tagged complaints.</p>
+                    </div>
+                    <div class="card-body p-0 position-relative">
+                        <div id="geoHeatmapContainer" class="geo-heatmap-container"></div>
+                        <div id="geoHeatmapState" class="geo-heatmap-state">
+                            <i class="fas fa-spinner fa-spin me-2"></i>Loading map data...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-3">
+                <div class="card shadow-sm border-0 mb-3">
+                    <div class="card-header bg-white py-3">
+                        <h6 class="mb-0"><i class="fas fa-chart-column me-2 text-primary"></i>Live Map Stats</h6>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled small mb-0" id="mapStats">
+                            <li class="geo-stat-row">
+                                <span class="text-muted">Geo-tagged points</span>
+                                <strong id="statTotal">0</strong>
+                            </li>
+                            <li class="geo-stat-row">
+                                <span class="text-muted">High priority</span>
+                                <strong id="statHigh" class="text-danger">0</strong>
+                            </li>
+                            <li class="geo-stat-row">
+                                <span class="text-muted">Delayed</span>
+                                <strong id="statDelayed" class="text-danger">0</strong>
+                            </li>
+                            <li class="geo-stat-row mb-0">
+                                <span class="text-muted">Closed</span>
+                                <strong id="statClosed" class="text-success">0</strong>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white py-3">
+                        <h6 class="mb-0"><i class="fas fa-circle-info me-2 text-primary"></i>Map Legend</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="small">
+                            <div class="geo-legend-row">
+                                <span class="geo-dot bg-warning me-2"></span>Pending
+                            </div>
+                            <div class="geo-legend-row">
+                                <span class="geo-dot bg-info me-2"></span>Under Review
+                            </div>
+                            <div class="geo-legend-row">
+                                <span class="geo-dot bg-primary me-2"></span>Action Taken
+                            </div>
+                            <div class="geo-legend-row">
+                                <span class="geo-dot bg-danger me-2"></span>Delayed
+                            </div>
+                            <div class="geo-legend-row">
+                                <span class="geo-dot bg-secondary me-2"></span>Reopened
+                            </div>
+                            <div class="geo-legend-row mb-0">
+                                <span class="geo-dot bg-success me-2"></span>Closed
+                            </div>
+                        </div>
+                        <hr>
+                        <p class="small text-muted mb-0">Use heat mode for density hotspots and marker mode for exact complaint locations.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const configuredMaxPoints = Math.max(200, Number({{ config['GEO_HEATMAP_MAX_POINTS'] or 2500 }}));
+    const isSmallViewport = window.matchMedia('(max-width: 768px)').matches;
+    const maxPointsToRender = isSmallViewport ? Math.max(120, Math.min(configuredMaxPoints, 900)) : configuredMaxPoints;
+    const stateEl = document.getElementById('geoHeatmapState');
+    const statusFilter = document.getElementById('statusFilter');
+    const priorityFilter = document.getElementById('priorityFilter');
+    const stateFilter = document.getElementById('stateFilter');
+    const districtFilter = document.getElementById('districtFilter');
+    const cityFilter = document.getElementById('cityFilter');
+    const layerModeFilter = document.getElementById('layerModeFilter');
+    const refreshBtn = document.getElementById('refreshMapBtn');
+    const resetFiltersBtn = document.getElementById('resetFiltersBtn');
+    const activeFilterSummary = document.getElementById('activeFilterSummary');
+
+    const statTotal = document.getElementById('statTotal');
+    const statHigh = document.getElementById('statHigh');
+    const statDelayed = document.getElementById('statDelayed');
+    const statClosed = document.getElementById('statClosed');
+
+    const statusColors = {
+        'Pending': '#f59e0b',
+        'Under Review': '#06b6d4',
+        'Action Taken': '#0b5ed7',
+        'Delayed': '#ef4444',
+        'Reopened': '#64748b',
+        'Closed': '#12b981'
+    };
+
+    if (!window.L || typeof window.L.map !== 'function') {
+        setState('Unable to load the map library. Please check your network or try refreshing.', true);
+        return;
+    }
+
+    const hasHeatPlugin = typeof window.L.heatLayer === 'function';
+    const map = L.map('geoHeatmapContainer', {
+        center: [20.5937, 78.9629],
+        zoom: 5,
+        scrollWheelZoom: true
+    });
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    if (!hasHeatPlugin) {
+        layerModeFilter.value = 'markers';
+        Array.from(layerModeFilter.options).forEach((option) => {
+            if (option.value !== 'markers') {
+                option.disabled = true;
+                option.textContent = `${option.textContent} (unavailable)`;
+            }
+        });
+    }
+
+    const markerLayer = L.layerGroup().addTo(map);
+    let heatLayer = null;
+
+    let allPoints = [];
+    let geoHierarchy = new Map();
+
+    function normalizeGeoValue(value) {
+        const cleaned = (value || '').toString().trim();
+        return cleaned || 'Unspecified';
+    }
+
+    function setSelectOptions(selectEl, values, allLabel) {
+        const currentValue = selectEl.value;
+        selectEl.innerHTML = '';
+
+        const defaultOption = document.createElement('option');
+        defaultOption.value = 'all';
+        defaultOption.textContent = allLabel;
+        selectEl.appendChild(defaultOption);
+
+        values.forEach((value) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            selectEl.appendChild(option);
+        });
+
+        if (currentValue && [...selectEl.options].some((option) => option.value === currentValue)) {
+            selectEl.value = currentValue;
+        } else {
+            selectEl.value = 'all';
+        }
+    }
+
+    function sortedValues(values) {
+        return Array.from(values).sort((a, b) => a.localeCompare(b));
+    }
+
+    function buildGeoHierarchy(points) {
+        const hierarchy = new Map();
+        points.forEach((point) => {
+            if (!hierarchy.has(point.state)) {
+                hierarchy.set(point.state, new Map());
+            }
+            const districtMap = hierarchy.get(point.state);
+            if (!districtMap.has(point.district)) {
+                districtMap.set(point.district, new Set());
+            }
+            districtMap.get(point.district).add(point.city);
+        });
+        return hierarchy;
+    }
+
+    function getDistrictValues(selectedState) {
+        const districts = new Set();
+        if (selectedState !== 'all') {
+            const districtMap = geoHierarchy.get(selectedState);
+            if (!districtMap) {
+                return [];
+            }
+            return sortedValues(new Set(districtMap.keys()));
+        }
+        geoHierarchy.forEach((districtMap) => {
+            districtMap.forEach((_, districtName) => districts.add(districtName));
+        });
+        return sortedValues(districts);
+    }
+
+    function getCityValues(selectedState, selectedDistrict) {
+        const cities = new Set();
+
+        if (selectedState !== 'all') {
+            const districtMap = geoHierarchy.get(selectedState);
+            if (!districtMap) {
+                return [];
+            }
+            if (selectedDistrict !== 'all') {
+                return sortedValues(districtMap.get(selectedDistrict) || new Set());
+            }
+            districtMap.forEach((citySet) => {
+                citySet.forEach((cityName) => cities.add(cityName));
+            });
+            return sortedValues(cities);
+        }
+
+        geoHierarchy.forEach((districtMap) => {
+            if (selectedDistrict !== 'all') {
+                const citySet = districtMap.get(selectedDistrict);
+                if (citySet) {
+                    citySet.forEach((cityName) => cities.add(cityName));
+                }
+                return;
+            }
+            districtMap.forEach((citySet) => {
+                citySet.forEach((cityName) => cities.add(cityName));
+            });
+        });
+
+        return sortedValues(cities);
+    }
+
+    function syncGeoFilterOptions() {
+        setSelectOptions(stateFilter, sortedValues(new Set(geoHierarchy.keys())), 'All States');
+        setSelectOptions(districtFilter, getDistrictValues(stateFilter.value), 'All Districts');
+        setSelectOptions(cityFilter, getCityValues(stateFilter.value, districtFilter.value), 'All Cities');
+    }
+
+    function syncDistrictAndCity() {
+        setSelectOptions(districtFilter, getDistrictValues(stateFilter.value), 'All Districts');
+        setSelectOptions(cityFilter, getCityValues(stateFilter.value, districtFilter.value), 'All Cities');
+    }
+
+    function syncCityOnly() {
+        setSelectOptions(cityFilter, getCityValues(stateFilter.value, districtFilter.value), 'All Cities');
+    }
+
+    function setState(message, isError = false) {
+        if (!message) {
+            stateEl.classList.add('d-none');
+            return;
+        }
+        stateEl.classList.remove('d-none');
+        stateEl.classList.toggle('geo-heatmap-error', isError);
+        stateEl.innerHTML = isError
+            ? `<i class="fas fa-triangle-exclamation me-2"></i>${message}`
+            : `<i class="fas fa-spinner fa-spin me-2"></i>${message}`;
+    }
+
+    function updateActiveFilterSummary(filteredCount) {
+        const applied = [];
+        if (statusFilter.value !== 'all') {
+            applied.push(`Status: ${statusFilter.value}`);
+        }
+        if (priorityFilter.value !== 'all') {
+            applied.push(`Priority: ${priorityFilter.value}`);
+        }
+        if (stateFilter.value !== 'all') {
+            applied.push(`State: ${stateFilter.value}`);
+        }
+        if (districtFilter.value !== 'all') {
+            applied.push(`District: ${districtFilter.value}`);
+        }
+        if (cityFilter.value !== 'all') {
+            applied.push(`City: ${cityFilter.value}`);
+        }
+        if (layerModeFilter.value !== 'heat') {
+            applied.push(`Layer: ${layerModeFilter.options[layerModeFilter.selectedIndex].text}`);
+        }
+
+        const base = `Showing ${filteredCount} of ${allPoints.length} geo-tagged complaints.`;
+        activeFilterSummary.textContent = applied.length
+            ? `${base} Filters: ${applied.join(' | ')}`
+            : `${base} Filters: None`;
+    }
+
+    function resetFilters() {
+        statusFilter.value = 'all';
+        priorityFilter.value = 'all';
+        layerModeFilter.value = 'markers';
+        stateFilter.value = 'all';
+        syncDistrictAndCity();
+        districtFilter.value = 'all';
+        syncCityOnly();
+        cityFilter.value = 'all';
+        renderMap();
+    }
+
+    function matchesFilters(point) {
+        const statusValue = statusFilter.value;
+        const priorityValue = priorityFilter.value;
+        const stateValue = stateFilter.value;
+        const districtValue = districtFilter.value;
+        const cityValue = cityFilter.value;
+
+        if (statusValue !== 'all' && point.status !== statusValue) {
+            return false;
+        }
+        if (priorityValue !== 'all' && point.priority !== priorityValue) {
+            return false;
+        }
+        if (stateValue !== 'all' && point.state !== stateValue) {
+            return false;
+        }
+        if (districtValue !== 'all' && point.district !== districtValue) {
+            return false;
+        }
+        if (cityValue !== 'all' && point.city !== cityValue) {
+            return false;
+        }
+        return true;
+    }
+
+    function renderMap() {
+        if (!allPoints.length) {
+            markerLayer.clearLayers();
+            if (heatLayer) {
+                map.removeLayer(heatLayer);
+            }
+            heatLayer = null;
+            statTotal.textContent = '0';
+            statHigh.textContent = '0';
+            statDelayed.textContent = '0';
+            statClosed.textContent = '0';
+            updateActiveFilterSummary(0);
+            setState('No geo-tagged complaints available yet.', true);
+            return;
+        }
+
+        const filtered = allPoints.filter(matchesFilters);
+
+        markerLayer.clearLayers();
+        if (heatLayer) {
+            map.removeLayer(heatLayer);
+        }
+
+        const mode = hasHeatPlugin ? layerModeFilter.value : 'markers';
+        const bounds = [];
+        const heatData = [];
+
+        let highCount = 0;
+        let delayedCount = 0;
+        let closedCount = 0;
+
+        filtered.forEach((point) => {
+            bounds.push([point.lat, point.lng]);
+            const intensity = point.priority === 'High' ? 1.0 : 0.45;
+            heatData.push([point.lat, point.lng, intensity]);
+
+            if (point.priority === 'High') {
+                highCount += 1;
+            }
+            if (point.status === 'Delayed') {
+                delayedCount += 1;
+            }
+            if (point.status === 'Closed') {
+                closedCount += 1;
+            }
+
+            if (mode === 'markers' || mode === 'both') {
+                const color = statusColors[point.status] || '#64748b';
+                const marker = L.circleMarker([point.lat, point.lng], {
+                    radius: point.priority === 'High' ? 8 : 6,
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: point.priority === 'High' ? 0.9 : 0.7,
+                    weight: 2
+                });
+
+                marker.bindPopup(`
+                    <div class="small">
+                        <div><strong>Tracking ID:</strong> ${point.tracking_id || '-'}</div>
+                        <div><strong>Status:</strong> ${point.status}</div>
+                        <div><strong>Priority:</strong> ${point.priority}</div>
+                        <div><strong>Area:</strong> ${point.city}, ${point.district}, ${point.state}</div>
+                        <div><strong>Submitted:</strong> ${point.submitted_at ? new Date(point.submitted_at).toLocaleString() : '-'}</div>
+                        <div><strong>Coordinates:</strong> ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}</div>
+                    </div>
+                `);
+                markerLayer.addLayer(marker);
+            }
+        });
+
+        if (mode === 'heat' || mode === 'both') {
+            heatLayer = L.heatLayer(heatData, {
+                radius: 30,
+                blur: 20,
+                maxZoom: 16,
+                minOpacity: 0.35,
+                gradient: {
+                    0.2: '#06b6d4',
+                    0.45: '#f59e0b',
+                    0.75: '#ef4444'
+                }
+            }).addTo(map);
+        } else {
+            heatLayer = null;
+        }
+
+        statTotal.textContent = filtered.length;
+        statHigh.textContent = highCount;
+        statDelayed.textContent = delayedCount;
+        statClosed.textContent = closedCount;
+        updateActiveFilterSummary(filtered.length);
+
+        if (!filtered.length) {
+            setState('No geo-tagged complaints match current filters.', true);
+            return;
+        }
+
+        if (!hasHeatPlugin && layerModeFilter.value !== 'markers') {
+            setState('Heatmap rendering is unavailable right now. Showing marker mode.', false);
+            layerModeFilter.value = 'markers';
+        }
+
+        setState('');
+        map.fitBounds(bounds, {padding: [25, 25], maxZoom: 14});
+    }
+
+    function fetchHeatmapData() {
+        setState('Loading map data...');
+        fetch(`/api/geo/heatmap?limit=${encodeURIComponent(maxPointsToRender)}`)
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then((data) => {
+                allPoints = Array.isArray(data)
+                    ? data.map((point) => ({
+                        ...point,
+                        state: normalizeGeoValue(point.state),
+                        district: normalizeGeoValue(point.district),
+                        city: normalizeGeoValue(point.city)
+                    }))
+                    : [];
+                geoHierarchy = buildGeoHierarchy(allPoints);
+                syncGeoFilterOptions();
+
+                if (!allPoints.length) {
+                    markerLayer.clearLayers();
+                    if (heatLayer) {
+                        map.removeLayer(heatLayer);
+                    }
+                    heatLayer = null;
+                    statTotal.textContent = '0';
+                    statHigh.textContent = '0';
+                    statDelayed.textContent = '0';
+                    statClosed.textContent = '0';
+                    updateActiveFilterSummary(0);
+                    setState('No geo-tagged complaints available yet.', true);
+                    return;
+                }
+                renderMap();
+            })
+            .catch(() => {
+                setState('Unable to load heatmap data right now.', true);
+            });
+    }
+
+    if (layerModeFilter && layerModeFilter.value === 'both' && !hasHeatPlugin) {
+        layerModeFilter.value = 'markers';
+    }
+
+    [statusFilter, priorityFilter, cityFilter, layerModeFilter].forEach((el) => {
+        el.addEventListener('change', renderMap);
+    });
+    stateFilter.addEventListener('change', () => {
+        syncDistrictAndCity();
+        renderMap();
+    });
+    districtFilter.addEventListener('change', () => {
+        syncCityOnly();
+        renderMap();
+    });
+
+    refreshBtn.addEventListener('click', fetchHeatmapData);
+    resetFiltersBtn.addEventListener('click', resetFilters);
+
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 120);
+    fetchHeatmapData();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<section class="py-5 bg-light">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-7">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white py-3">
+                        <h1 class="h5 mb-0">
+                            <i class="fas fa-user-circle text-primary me-2"></i>My Profile
+                        </h1>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Username</small>
+                                <strong>{{ user.username }}</strong>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Role</small>
+                                <strong>{{ user.role|title }}</strong>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Email</small>
+                                <strong>{{ user.email or '-' }}</strong>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Department</small>
+                                <strong>{{ user.department.name if user.department else '-' }}</strong>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Joined</small>
+                                <strong>{{ user.created_at|format_datetime }}</strong>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="text-muted d-block mb-1">Last Login</small>
+                                <strong>{{ user.last_login|format_datetime if user.last_login else 'Never' }}</strong>
+                            </div>
+                        </div>
+                    </div>
+                    {% if session.role == 'admin' %}
+                    <div class="card-body border-top">
+                        <h2 class="h6 mb-3">
+                            <i class="fas fa-key text-primary me-2"></i>Change Admin Password
+                        </h2>
+                        <form method="POST" action="{{ url_for('auth.change_admin_password') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label for="current_password" class="form-label small fw-semibold">Current Password</label>
+                                    <input type="password" class="form-control" id="current_password" name="current_password" required minlength="8" autocomplete="current-password">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="new_password" class="form-label small fw-semibold">New Password</label>
+                                    <input type="password" class="form-control" id="new_password" name="new_password" required minlength="8" autocomplete="new-password">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="confirm_password" class="form-label small fw-semibold">Confirm New Password</label>
+                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" required minlength="8" autocomplete="new-password">
+                                </div>
+                            </div>
+                            <div class="form-text mt-2">Use at least 8 characters with letters and numbers.</div>
+                            <div class="mt-3">
+                                <button type="submit" class="btn btn-primary btn-sm">
+                                    <i class="fas fa-lock me-1"></i>Update Password
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    {% endif %}
+                    <div class="card-footer bg-white">
+                        {% if session.role == 'admin' %}
+                        <a href="{{ url_for('admin.dashboard') }}" class="btn btn-primary btn-sm">
+                            <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+                        </a>
+                        {% else %}
+                        <a href="{{ url_for('officer.dashboard') }}" class="btn btn-primary btn-sm">
+                            <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

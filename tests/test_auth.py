@@ -82,6 +82,18 @@ class TestLogin:
         assert response.status_code == 302
         assert '/officer/dashboard' in response.headers.get('Location', '')
 
+    def test_login_keeps_next_after_failed_attempt(self, client):
+        """Next redirect target should remain in the form after validation errors."""
+        response = client.post(
+            '/auth/login?next=/admin/dashboard',
+            data={
+                'username': 'testuser',
+                'password': 'wrong-pass'
+            }
+        )
+        assert response.status_code == 200
+        assert b'name="next" value="/admin/dashboard"' in response.data
+
     def test_login_locks_after_repeated_failures(self, client):
         """Test brute force lockout after repeated failed attempts."""
         for _ in range(5):
