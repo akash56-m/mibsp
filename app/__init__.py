@@ -164,7 +164,12 @@ def ensure_database_schema_compatibility(app):
             if dialect == 'sqlite':
                 patch = sqlite_patch.get(table, {})
             else:
-                patch = columns
+                patch = {}
+                for column_name, ddl in columns.items():
+                    ddl = ddl.replace('DATETIME', 'TIMESTAMP')
+                    if column_name == 'ai_urgent':
+                        ddl = ddl.replace('DEFAULT 0', 'DEFAULT false')
+                    patch[column_name] = ddl
 
             current_columns = existing_columns.get(table, set())
             for column_name, ddl in patch.items():
