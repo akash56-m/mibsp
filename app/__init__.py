@@ -2,7 +2,7 @@
 MIBSP Flask Application Factory
 Creates and configures the Flask application with all extensions.
 """
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from flask import Flask, render_template
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -60,13 +60,138 @@ def create_app(config_name=None):
     # Register template filters
     register_template_filters(app)
     
-    # Create database tables if they don't exist (development only)
-    if config_name == 'development':
-        with app.app_context():
-            db.create_all()
-            ensure_sqlite_schema_compatibility(app)
+    # Ensure schema compatibility and bootstrap tables where needed.
+    # This keeps self-hosted Render/Postgres/MySQL instances in sync with
+    # the latest model fields even when the DB was provisioned from older schema.
+    with app.app_context():
+        ensure_database_schema_compatibility(app)
     
     return app
+
+
+def ensure_database_schema_compatibility(app):
+    """
+    Ensure required tables and columns exist across environments.
+
+    Older deployments may have been created before newer model fields were added.
+    SQLAlchemy `create_all()` won't alter existing schemas, so we explicitly
+    add missing columns when tables already exist.
+    """
+    required_columns_by_table = {
+        'departments': {},
+        'services': {
+            'sla_days': "INTEGER NOT NULL DEFAULT 7",
+        },
+        'users': {
+            'failed_login_attempts': "INTEGER NOT NULL DEFAULT 0",
+            'locked_until': "DATETIME",
+        },
+        'complaints': {
+            'escalation_level': "INTEGER NOT NULL DEFAULT 0",
+            'sla_due_at': "DATETIME",
+            'delayed_at': "DATETIME",
+            'reopen_count': "INTEGER NOT NULL DEFAULT 0",
+            'citizen_rating': "INTEGER",
+            'citizen_feedback': "TEXT",
+            'feedback_submitted_at': "DATETIME",
+            'priority': "VARCHAR(20) NOT NULL DEFAULT 'Normal'",
+            'ai_category': "VARCHAR(80)",
+            'ai_sentiment': "VARCHAR(20) NOT NULL DEFAULT 'neutral'",
+            'ai_urgent': "BOOLEAN NOT NULL DEFAULT 0",
+            'state': "VARCHAR(80)",
+            'district': "VARCHAR(120)",
+            'city': "VARCHAR(120)",
+            'location_lat': "FLOAT",
+            'location_lng': "FLOAT",
+        },
+        'audit_logs': {},
+    }
+
+    # Keep a compatibility path for local sqlite databases.
+    sqlite_patch = {
+        'services': {
+            'sla_days': "INTEGER NOT NULL DEFAULT 7",
+        },
+        'users': {
+            'failed_login_attempts': "INTEGER NOT NULL DEFAULT 0",
+            'locked_until': "DATETIME",
+        },
+        'complaints': {
+            'escalation_level': "INTEGER NOT NULL DEFAULT 0",
+            'sla_due_at': "DATETIME",
+            'delayed_at': "DATETIME",
+            'reopen_count': "INTEGER NOT NULL DEFAULT 0",
+            'citizen_rating': "INTEGER",
+            'citizen_feedback': "TEXT",
+            'feedback_submitted_at': "DATETIME",
+            'priority': "VARCHAR(20) NOT NULL DEFAULT 'Normal'",
+            'ai_category': "VARCHAR(80)",
+            'ai_sentiment': "VARCHAR(20) NOT NULL DEFAULT 'neutral'",
+            'ai_urgent': "BOOLEAN NOT NULL DEFAULT 0",
+            'state': "VARCHAR(80)",
+            'district': "VARCHAR(120)",
+            'city': "VARCHAR(120)",
+            'location_lat': "FLOAT",
+            'location_lng': "FLOAT",
+        },
+    }
+
+    try:
+        inspector = inspect(db.engine)
+        existing_tables = {table_name for table_name in inspector.get_table_names()}
+
+        # Fresh DB: create all tables so basic app routes work immediately.
+        if not {'departments', 'services', 'complaints', 'users', 'audit_logs'}.issubset(
+            existing_tables
+        ):
+            db.create_all()
+            existing_tables = {table_name for table_name in inspector.get_table_names()}
+
+        # Build a stable set of column names for each table.
+        existing_columns = {}
+        for table in required_columns_by_table:
+            if table not in existing_tables:
+                continue
+            cols = inspector.get_columns(table)
+            existing_columns[table] = {c['name'] for c in cols}
+
+        dialect = db.engine.dialect.name
+
+        for table, columns in required_columns_by_table.items():
+            if table not in existing_tables:
+                continue
+
+            if dialect == 'sqlite':
+                patch = sqlite_patch.get(table, {})
+            else:
+                patch = columns
+
+            current_columns = existing_columns.get(table, set())
+            for column_name, ddl in patch.items():
+                if column_name in current_columns:
+                    continue
+                try:
+                    db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column_name} {ddl}'))
+                    app.logger.warning(
+                        'Applied runtime schema compatibility fix: %s.%s (%s)',
+                        table, column_name, dialect
+                    )
+                except Exception as exc:
+                    app.logger.error(
+                        'Failed to add missing column %s.%s: %s',
+                        table, column_name, str(exc)
+                    )
+                    raise
+
+        db.session.commit()
+
+        # Keep the existing SQLite compatibility routine for runtime safety.
+        if db.engine.url.get_backend_name() == 'sqlite':
+            ensure_sqlite_schema_compatibility(app)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Database schema compatibility check failed')
+        raise
 
 
 def ensure_sqlite_schema_compatibility(app):
