@@ -532,7 +532,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function fetchHeatmapData() {
         setState('Loading map data...');
-        fetch(`/api/geo/heatmap?limit=${encodeURIComponent(maxPointsToRender)}`)
+        const cacheBuster = Date.now();
+        fetch(`/api/geo/heatmap?limit=${encodeURIComponent(maxPointsToRender)}&_=${cacheBuster}`, {
+            cache: 'no-store'
+        })
             .then((response) => {
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);

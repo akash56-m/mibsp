@@ -91,6 +91,14 @@ def _invalidate_response_cache():
         _response_cache.clear()
 
 
+def _json_no_store(payload):
+    """Return JSON response with no-store headers for real-time endpoints."""
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    return response
+
+
 def _get_client_ip():
     forwarded = request.headers.get('X-Forwarded-For', '')
     if forwarded:
@@ -212,6 +220,29 @@ def _fallback_ai_reply(assistant_mode, message, description, department_name, se
     if assistant_mode == 'homepage':
         return _fallback_homepage_reply(message)
     return _fallback_draft_reply(message, description, department_name, service_name)
+
+
+def _parse_optional_coordinate(raw_value, label, min_value, max_value):
+    """
+    Parse optional coordinate value.
+    Accepts decimal commas and returns (value, error_message).
+    """
+    if raw_value is None:
+        return None, None
+    text_value = str(raw_value).strip()
+    if not text_value:
+        return None, None
+
+    normalized = text_value.replace(',', '.')
+    try:
+        numeric_value = float(normalized)
+    except (TypeError, ValueError):
+        return None, f'{label} must be a valid number.'
+
+    if numeric_value < min_value or numeric_value > max_value:
+        return None, f'{label} must be between {min_value} and {max_value}.'
+
+    return numeric_value, None
 
 
 def _month_start(value):
@@ -502,8 +533,14 @@ def submit_complaint():
         department_id = request.form.get('department_id', type=int)
         service_id = request.form.get('service_id', type=int)
         description = request.form.get('description', '').strip()
-        location_lat = request.form.get('location_lat', type=float)
-        location_lng = request.form.get('location_lng', type=float)
+        location_lat_raw = request.form.get('location_lat')
+        location_lng_raw = request.form.get('location_lng')
+        location_lat, lat_error = _parse_optional_coordinate(
+            location_lat_raw, 'Latitude', -90, 90
+        )
+        location_lng, lng_error = _parse_optional_coordinate(
+            location_lng_raw, 'Longitude', -180, 180
+        )
         state = (request.form.get('state') or '').strip() or None
         district = (request.form.get('district') or '').strip() or None
         city = (request.form.get('city') or '').strip() or None
@@ -528,10 +565,12 @@ def submit_complaint():
                 errors.append('Invalid service selection for this department.')
 
         # Optional geo validation
-        if location_lat is not None and not (-90 <= location_lat <= 90):
-            errors.append('Latitude must be between -90 and 90.')
-        if location_lng is not None and not (-180 <= location_lng <= 180):
-            errors.append('Longitude must be between -180 and 180.')
+        if lat_error:
+            errors.append(lat_error)
+        if lng_error:
+            errors.append(lng_error)
+        if (location_lat is None) ^ (location_lng is None):
+            errors.append('Provide both latitude and longitude together.')
         if state and len(state) > 80:
             errors.append('State must be 80 characters or fewer.')
         if district and len(district) > 120:
@@ -1138,7 +1177,7 @@ def get_geo_heatmap_data():
     cache_key = ('geo_heatmap', int(requested_limit))
     cached = _cache_get(cache_key)
     if cached is not None:
-        return jsonify(cached)
+        return _json_no_store(cached)
 
     complaints = Complaint.query.filter(
         Complaint.location_lat.isnot(None),
@@ -1157,8 +1196,8 @@ def get_geo_heatmap_data():
             'submitted_at': complaint.submitted_at.isoformat() if complaint.submitted_at else None
         } for complaint in complaints
     ]
-    _cache_set(cache_key, payload, _cache_ttl(0.8))
-    return jsonify(payload)
+    _cache_set(cache_key, payload, _cache_ttl(0.2))
+    return _json_no_store(payload)
 
 
 @public_bp.route('/api/ai/assist', methods=['POST'])
