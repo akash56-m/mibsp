@@ -20,6 +20,13 @@
                 <p class="text-muted mb-0">Immutable record of all system actions</p>
             </div>
             <div class="d-flex gap-2 align-items-center">
+                <form method="POST" action="{{ url_for('admin.rebuild_audit_chain') }}" class="m-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                            onclick="return confirm('Rebuild audit log chain now? This should only be used for migration recovery.');">
+                        <i class="fas fa-tools me-1"></i>Rebuild Chain
+                    </button>
+                </form>
                 <button class="btn btn-sm btn-outline-primary" id="verifyChainBtn">
                     <i class="fas fa-shield-alt me-1"></i>Verify Chain
                 </button>

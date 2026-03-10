@@ -587,6 +587,27 @@ def verify_audit_logs():
     })
 
 
+@admin_bp.route('/audit-logs/rebuild', methods=['POST'])
+@admin_required
+def rebuild_audit_chain():
+    """Recompute audit log chain hashes and previous hash pointers."""
+    if session.get('role') != 'admin':
+        flash('Only admins can rebuild the audit chain.', 'danger')
+        return redirect(url_for('admin.audit_logs'))
+
+    result = AuditLog.rebuild_chain(dry_run=False)
+    log_action(
+        'AUDIT_CHAIN_REBUILT',
+        user=db.session.get(User, session['user_id'])
+    )
+    flash(
+        f'Audit chain rebuilt for {result["total"]} logs; {result["repaired"]} entries updated.',
+        'success' if result['repaired'] else 'info'
+    )
+
+    return redirect(url_for('admin.audit_logs'))
+
+
 # =============================================================================
 # API ENDPOINTS
 # =============================================================================

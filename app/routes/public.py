@@ -368,6 +368,14 @@ def about():
     return render_template('public/about.html')
 
 
+@public_bp.route('/contact')
+@public_bp.route('/privacy')
+@public_bp.route('/terms')
+def legacy_legal_pages():
+    """Backward-compatible route aliases for older deep links."""
+    return redirect(url_for('public.about'))
+
+
 @public_bp.route('/how-it-works')
 def how_it_works():
     """How it works page with process explanation."""
@@ -520,6 +528,12 @@ def submit_complaint():
     return render_template('public/submit.html', departments=departments)
 
 
+@public_bp.route('/submit-complaint')
+def submit_complaint_legacy():
+    """Backward-compatible path kept for older bookmarks / external links."""
+    return redirect(url_for('public.submit_complaint'))
+
+
 @public_bp.route('/confirmation/<tracking_id>')
 def confirmation(tracking_id):
     """Confirmation page showing tracking ID."""
@@ -560,6 +574,20 @@ def track_complaint():
     return render_template('public/track.html', 
                           complaint=complaint, 
                           tracking_id=tracking_id)
+
+
+@public_bp.route('/track-complaint', methods=['GET', 'POST'])
+def track_complaint_legacy():
+    """Backward-compatible path kept for older bookmarks / external links."""
+    if request.method == 'POST':
+        tracking_id = request.form.get('tracking_id', '').strip().upper()
+        if tracking_id:
+            return redirect(url_for('public.track_complaint',
+                                    tracking_id=tracking_id))
+        return redirect(url_for('public.track_complaint'))
+
+    return redirect(url_for('public.track_complaint',
+                            tracking_id=request.args.get('tracking_id', '').strip().upper()))
 
 
 @public_bp.route('/complaint/<tracking_id>/reopen', methods=['POST'])

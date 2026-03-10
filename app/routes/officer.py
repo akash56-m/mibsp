@@ -50,6 +50,12 @@ def dashboard():
                           stats=stats)
 
 
+@officer_bp.route('/complaints')
+def complaints_redirect():
+    """Backward-compatible path kept for older bookmarks / external links."""
+    return redirect(url_for('officer.dashboard'))
+
+
 @officer_bp.route('/complaint/<tracking_id>')
 @officer_required
 def complaint_detail(tracking_id):

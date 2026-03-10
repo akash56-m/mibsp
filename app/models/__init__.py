@@ -530,6 +530,48 @@ class AuditLog(db.Model):
     def verify_integrity(self):
         """Verify that stored hash matches calculated hash."""
         return self.row_hash == self.calculate_hash()
+
+    @staticmethod
+    def rebuild_chain(dry_run=False):
+        """Rebuild the hash chain for all existing audit logs."""
+        logs = AuditLog.query.order_by(AuditLog.id.asc()).all()
+        if not logs:
+            return {'total': 0, 'repaired': 0, 'dry_run': bool(dry_run)}
+
+        repaired = 0
+        previous_hash = None
+
+        for log in logs:
+            expected_previous = previous_hash
+            current_previous = log.previous_hash
+
+            # Apply canonical previous hash before calculating row hash.
+            log.previous_hash = expected_previous
+            expected_hash = log.calculate_hash()
+
+            if current_previous != expected_previous or log.row_hash != expected_hash:
+                repaired += 1
+                if not dry_run:
+                    log.previous_hash = expected_previous
+                    log.row_hash = expected_hash
+
+            previous_hash = expected_hash
+
+        if dry_run or repaired == 0:
+            if not dry_run:
+                db.session.rollback()
+            return {
+                'total': len(logs),
+                'repaired': repaired,
+                'dry_run': bool(dry_run)
+            }
+
+        db.session.commit()
+        return {
+            'total': len(logs),
+            'repaired': repaired,
+            'dry_run': bool(dry_run)
+        }
     
     @staticmethod
     def get_previous_hash():
