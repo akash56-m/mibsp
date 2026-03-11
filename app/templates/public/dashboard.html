@@ -14,6 +14,7 @@
 {% set in_progress = under_review + action_taken + delayed + reopened %}
 {% set sla_compliance = stats.sla_compliance or 0 %}
 {% set backlog_rate = (((pending + in_progress) / total * 100) if total > 0 else 0)|round(1) %}
+{% set top_services = top_services or [] %}
 {% set active_departments = (dept_stats | selectattr('total', 'gt', 0) | list | length) %}
 {% set ranked_departments = dept_stats | sort(attribute='score', reverse=true) %}
 
@@ -60,7 +61,7 @@
         <div class="chart-card dashboard-filter-card mb-4" data-reveal>
             <div class="card-body p-3 p-md-4">
                 <div class="row g-3 align-items-end">
-                    <div class="col-md-3">
+                    <div class="col-12 col-sm-6 col-lg-3">
                         <label for="dashboardDeptFilter" class="form-label small fw-semibold mb-1">Department</label>
                         <select id="dashboardDeptFilter" class="form-select form-select-sm">
                             <option value="">All Departments</option>
@@ -69,7 +70,7 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-12 col-sm-6 col-lg-3">
                         <label for="dashboardStatusFilter" class="form-label small fw-semibold mb-1">Status</label>
                         <select id="dashboardStatusFilter" class="form-select form-select-sm">
                             <option value="">All Statuses</option>
@@ -78,19 +79,19 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-12 col-sm-6 col-lg-2">
                         <label for="dashboardFromMonth" class="form-label small fw-semibold mb-1">From Month</label>
                         <input type="month" id="dashboardFromMonth" class="form-control form-control-sm">
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-12 col-sm-6 col-lg-2">
                         <label for="dashboardToMonth" class="form-label small fw-semibold mb-1">To Month</label>
                         <input type="month" id="dashboardToMonth" class="form-control form-control-sm">
                     </div>
-                    <div class="col-md-2 d-grid gap-2 dashboard-filter-actions">
-                        <button type="button" class="btn btn-primary btn-sm" id="dashboardApplyBtn">
+                    <div class="col-12 col-sm-6 col-lg-2 d-grid gap-2 d-sm-flex d-lg-grid dashboard-filter-actions">
+                        <button type="button" class="btn btn-primary btn-sm flex-fill" id="dashboardApplyBtn">
                             <i class="fas fa-filter me-1"></i>Apply
                         </button>
-                        <button type="button" class="btn btn-outline-secondary btn-sm" id="dashboardResetBtn">
+                        <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" id="dashboardResetBtn">
                             <i class="fas fa-rotate me-1"></i>Reset
                         </button>
                     </div>
@@ -170,6 +171,58 @@
                     <div class="dashboard-insight-title"><i class="fas fa-percent me-2"></i>Backlog Pressure</div>
                     <div class="dashboard-insight-value" id="insightBacklogValue">{{ backlog_rate }}%</div>
                     <div class="small text-muted">Share of total complaints still not closed.</div>
+                </div>
+            </div>
+        </div>
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-4" data-reveal>
+                <div class="dashboard-insight dashboard-insight-warning h-100">
+                    <div class="dashboard-insight-title"><i class="fas fa-face-angry me-2"></i>Sentiment Snapshot</div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Negative</span>
+                        <strong id="sentimentNegative">{{ '%.2f'|format(stats.negative_percent or 0) }}%</strong>
+                    </div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Urgent</span>
+                        <strong id="sentimentUrgent">{{ '%.2f'|format(stats.urgent_percent or 0) }}%</strong>
+                    </div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Reopened</span>
+                        <strong id="sentimentRepeated">{{ '%.2f'|format(stats.repeated_percent or 0) }}%</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-4" data-reveal>
+                <div class="dashboard-insight dashboard-insight-success h-100">
+                    <div class="dashboard-insight-title"><i class="fas fa-chart-line me-2"></i>Quality Signals</div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Avg Resolution</span>
+                        <strong id="qualityAvgResolution">{{ stats.avg_resolution_hours or 0 }} hrs</strong>
+                    </div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Feedback Rate</span>
+                        <strong id="qualityFeedbackRate">{{ '%.2f'|format(stats.feedback_rate or 0) }}%</strong>
+                    </div>
+                    <div class="dashboard-insight-row">
+                        <span class="small text-muted">Resolution Rate</span>
+                        <strong>{{ '%.2f'|format(stats.resolution_rate or 0) }}%</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-4" data-reveal>
+                <div class="dashboard-insight dashboard-insight-neutral h-100">
+                    <div class="dashboard-insight-title"><i class="fas fa-ranking-star me-2"></i>Top Services</div>
+                    <div id="topServicesPanel">
+                        {% for item in top_services %}
+                        <div class="dashboard-insight-row">
+                            <span class="small text-muted text-truncate d-inline-block" style="max-width: 190px;">{{ item.name }}</span>
+                            <strong>{{ item.count }}</strong>
+                        </div>
+                        {% endfor %}
+                        {% if not top_services %}
+                        <p class="small text-muted mb-0">No service activity yet.</p>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>

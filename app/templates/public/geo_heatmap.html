@@ -237,6 +237,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let allPoints = [];
     let geoHierarchy = new Map();
+    const noStoreHeaders = {
+        'Cache-Control': 'no-store',
+        'Pragma': 'no-cache'
+    };
+    let activeFetchController = null;
+    let heatmapFetchSeq = 0;
 
     function normalizeGeoValue(value) {
         const cleaned = (value || '').toString().trim();
@@ -348,6 +354,24 @@ document.addEventListener('DOMContentLoaded', function() {
         setSelectOptions(cityFilter, getCityValues(stateFilter.value, districtFilter.value), 'All Cities');
     }
 
+    function getCurrentFilters() {
+        return {
+            status: statusFilter?.value || 'all',
+            priority: priorityFilter?.value || 'all',
+            state: stateFilter?.value || 'all',
+            district: districtFilter?.value || 'all',
+            city: cityFilter?.value || 'all'
+        };
+    }
+
+    function buildHeatmapUrl() {
+        const params = new URLSearchParams();
+        params.set('limit', String(maxPointsToRender));
+        params.set('_', String(Date.now()));
+
+        return `/api/geo/heatmap?${params.toString()}`;
+    }
+
     function setState(message, isError = false) {
         if (!message) {
             stateEl.classList.add('d-none');
@@ -390,13 +414,13 @@ document.addEventListener('DOMContentLoaded', function() {
     function resetFilters() {
         statusFilter.value = 'all';
         priorityFilter.value = 'all';
-        layerModeFilter.value = 'markers';
+        layerModeFilter.value = hasHeatPlugin ? 'heat' : 'markers';
         stateFilter.value = 'all';
         syncDistrictAndCity();
         districtFilter.value = 'all';
         syncCityOnly();
         cityFilter.value = 'all';
-        renderMap();
+        fetchHeatmapData();
     }
 
     function matchesFilters(point) {
@@ -527,14 +551,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         setState('');
+        if (bounds.length === 1) {
+            map.setView(bounds[0], Math.max(map.getZoom(), 14));
+            return;
+        }
         map.fitBounds(bounds, {padding: [25, 25], maxZoom: 14});
     }
 
     function fetchHeatmapData() {
+        const requestId = ++heatmapFetchSeq;
+        if (activeFetchController) {
+            activeFetchController.abort();
+        }
+        const controller = new AbortController();
+        activeFetchController = controller;
+
         setState('Loading map data...');
-        const cacheBuster = Date.now();
-        fetch(`/api/geo/heatmap?limit=${encodeURIComponent(maxPointsToRender)}&_=${cacheBuster}`, {
-            cache: 'no-store'
+        fetch(buildHeatmapUrl(), {
+            cache: 'no-store',
+            headers: noStoreHeaders,
+            signal: controller.signal
         })
             .then((response) => {
                 if (!response.ok) {
@@ -543,6 +579,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 return response.json();
             })
             .then((data) => {
+                if (requestId !== heatmapFetchSeq) {
+                    return;
+                }
                 allPoints = Array.isArray(data)
                     ? data.map((point) => ({
                         ...point,
@@ -570,8 +609,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 renderMap();
             })
-            .catch(() => {
+            .catch((error) => {
+                if (error?.name === 'AbortError' || requestId !== heatmapFetchSeq) {
+                    return;
+                }
                 setState('Unable to load heatmap data right now.', true);
+            })
+            .finally(() => {
+                if (activeFetchController === controller) {
+                    activeFetchController = null;
+                }
             });
     }
 
@@ -579,15 +626,20 @@ document.addEventListener('DOMContentLoaded', function() {
         layerModeFilter.value = 'markers';
     }
 
-    [statusFilter, priorityFilter, cityFilter, layerModeFilter].forEach((el) => {
-        el.addEventListener('change', renderMap);
-    });
+    statusFilter.addEventListener('change', renderMap);
+    priorityFilter.addEventListener('change', renderMap);
     stateFilter.addEventListener('change', () => {
         syncDistrictAndCity();
         renderMap();
     });
     districtFilter.addEventListener('change', () => {
         syncCityOnly();
+        renderMap();
+    });
+    cityFilter.addEventListener('change', () => {
+        renderMap();
+    });
+    layerModeFilter.addEventListener('change', () => {
         renderMap();
     });
 
@@ -598,6 +650,13 @@ document.addEventListener('DOMContentLoaded', function() {
         map.invalidateSize();
     }, 120);
     fetchHeatmapData();
+
+    // Pull latest geo points periodically for long-open dashboards.
+    setInterval(() => {
+        if (document.visibilityState === 'visible') {
+            fetchHeatmapData();
+        }
+    }, 45000);
 });
 </script>
 {% endblock %}

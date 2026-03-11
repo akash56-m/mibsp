@@ -866,6 +866,20 @@ h6 {
     padding: 1rem;
 }
 
+.dashboard-insight-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.34rem 0;
+    border-bottom: 1px dashed #deebfa;
+}
+
+.dashboard-insight-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+
 .dashboard-insight-title {
     font-size: 0.82rem;
     font-weight: 800;
@@ -1606,6 +1620,14 @@ h6 {
 
     .mobile-data-page .metric-value {
         font-size: 1.2rem;
+    }
+
+    .dashboard-filter-actions .btn {
+        min-width: 0;
+    }
+
+    .dashboard-filter-actions.d-sm-flex .btn {
+        width: 100%;
     }
 
     .submit-hero-card h2 {

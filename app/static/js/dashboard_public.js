@@ -1,413 +1,669 @@
-document.addEventListener('DOMContentLoaded', function() {
-    const elements = {
-        applyBtn: document.getElementById('dashboardApplyBtn'),
-        resetBtn: document.getElementById('dashboardResetBtn'),
-        filterError: document.getElementById('dashboardFilterError'),
-        updatedAt: document.getElementById('dashboardUpdatedAt'),
-        deptFilter: document.getElementById('dashboardDeptFilter'),
-        statusFilter: document.getElementById('dashboardStatusFilter'),
-        fromMonth: document.getElementById('dashboardFromMonth'),
-        toMonth: document.getElementById('dashboardToMonth'),
-        metricTotal: document.getElementById('metricTotal'),
-        metricPending: document.getElementById('metricPending'),
-        metricInProgress: document.getElementById('metricInProgress'),
-        metricResolved: document.getElementById('metricResolved'),
-        metricHighPriority: document.getElementById('metricHighPriority'),
-        metricSlaCompliance: document.getElementById('metricSlaCompliance'),
-        activeDepartments: document.getElementById('activeDepartmentsPill'),
-        delayedInsight: document.getElementById('insightDelayedValue'),
-        reopenedInsight: document.getElementById('insightReopenedValue'),
-        backlogInsight: document.getElementById('insightBacklogValue'),
-        deptScoreboard: document.getElementById('deptScoreboardGrid'),
-        bestDepartmentName: document.getElementById('bestDepartmentName'),
-        bestDepartmentScore: document.getElementById('bestDepartmentScore'),
-        worstDepartmentName: document.getElementById('worstDepartmentName'),
-        worstDepartmentScore: document.getElementById('worstDepartmentScore'),
-        recentActivityBody: document.getElementById('recentActivityBody'),
-        monthlyState: document.getElementById('monthlyChartState'),
-        statusState: document.getElementById('statusChartState'),
-        deptState: document.getElementById('deptChartState'),
-        resolutionState: document.getElementById('resolutionTimeChartState'),
-        slaState: document.getElementById('slaComplianceChartState')
-    };
+(function () {
+    'use strict';
 
-    const charts = {
-        monthly: null,
-        status: null,
-        dept: null,
-        resolution: null,
-        sla: null
-    };
-
-    const chartConfigs = {
-        monthly: {
-            elementId: 'monthlyChart',
-            stateId: 'monthlyChartState',
-            makeData: (payload) => ({
-                labels: payload.labels || [],
-                datasets: [{
-                    label: 'Complaints',
-                    data: payload.data || [],
-                    borderColor: '#1a56db',
-                    backgroundColor: 'rgba(26, 86, 219, 0.12)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            }),
-            type: 'line'
-        },
-        status: {
-            elementId: 'statusChart',
-            stateId: 'statusChartState',
-            makeData: (payload) => ({
-                labels: payload.labels || [],
-                datasets: [{
-                    data: payload.data || [],
-                    backgroundColor: [
-                        '#f59e0b',
-                        '#06b6d4',
-                        '#1a56db',
-                        '#ef4444',
-                        '#64748b',
-                        '#10b981'
-                    ]
-                }]
-            }),
-            type: 'doughnut'
-        },
-        dept: {
-            elementId: 'deptChart',
-            stateId: 'deptChartState',
-            makeData: (payload) => ({
-                labels: payload.labels || [],
-                datasets: [{
-                    label: 'Complaint Count',
-                    data: payload.data || [],
-                    backgroundColor: '#1a56db',
-                    borderWidth: 0
-                }]
-            }),
-            type: 'bar'
-        },
-        resolution: {
-            elementId: 'resolutionTimeChart',
-            stateId: 'resolutionTimeChartState',
-            makeData: (payload) => ({
-                labels: payload.labels || [],
-                datasets: [{
-                    label: 'Avg Resolution (hrs)',
-                    data: payload.data || [],
-                    borderColor: '#0ea5e9',
-                    backgroundColor: 'rgba(14, 165, 233, 0.15)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            }),
-            type: 'line'
-        },
-        sla: {
-            elementId: 'slaComplianceChart',
-            stateId: 'slaComplianceChartState',
-            makeData: (payload) => ({
-                labels: payload.labels || [],
-                datasets: [{
-                    label: 'SLA Compliance %',
-                    data: payload.data || [],
-                    borderColor: '#16a34a',
-                    backgroundColor: 'rgba(22, 163, 74, 0.12)',
-                    fill: true,
-                    tension: 0.25
-                }]
-            }),
-            type: 'line'
-        }
-    };
-
-    const commonOptions = {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'bottom' } }
-    };
-
-    function safeTextContent(node, value) {
-        if (node) {
-            node.textContent = value;
-        }
-    }
-
-    function setFilterError(message, isError = true) {
-        if (!elements.filterError) {
-            return;
-        }
-
-        if (message) {
-            elements.filterError.textContent = message;
-            elements.filterError.classList.toggle('d-none', !isError);
-            return;
-        }
-
-        elements.filterError.classList.add('d-none');
-        elements.filterError.textContent = '';
-    }
-
-    function setChartState(stateId, loading = true, message = '') {
-        const stateEl = document.getElementById(stateId);
-        if (!stateEl) {
-            return;
-        }
-
-        if (loading) {
-            stateEl.classList.remove('d-none');
-            stateEl.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>${message || 'Loading...'}`;
-            return;
-        }
-
-        stateEl.classList.add('d-none');
-    }
-
-    function destroyChart(chartRef) {
-        if (chartRef && typeof chartRef.destroy === 'function') {
-            chartRef.destroy();
-        }
-    }
-
-    function normalizePayload(payload) {
-        const safe = payload || {};
-        return {
-            stats: safe.stats || {},
-            active_departments: Number(safe.active_departments || 0),
-            best_department: safe.best_department || null,
-            worst_department: safe.worst_department || null,
-            dept_stats: safe.dept_stats || [],
-            recent_complaints: safe.recent_complaints || []
-        };
-    }
-
-    function applyOverviewPayload(payload) {
-        const data = normalizePayload(payload);
-        const stats = data.stats || {};
-
-        safeTextContent(elements.metricTotal, stats.total || 0);
-        safeTextContent(elements.metricPending, stats.pending || 0);
-        safeTextContent(elements.metricInProgress, (stats.pending || 0) + (stats.under_review || 0) + (stats.action_taken || 0) + (stats.reopened || 0));
-        safeTextContent(elements.metricResolved, stats.closed || 0);
-        safeTextContent(elements.metricHighPriority, stats.high_priority || 0);
-        safeTextContent(elements.metricSlaCompliance, `${Number(stats.sla_compliance || 0).toFixed(2)}`);
-        safeTextContent(elements.activeDepartments, `${data.active_departments || 0} active departments`);
-
-        safeTextContent(elements.delayedInsight, `${stats.delayed || 0} delayed complaints`);
-        safeTextContent(elements.reopenedInsight, `${stats.reopened || 0} reopened complaints`);
-        safeTextContent(elements.backlogInsight, `${Number(stats.pending || 0) > 0 ? 'Pending complaints in backlog.' : 'No pending backlog.'}`);
-
-        if (data.best_department) {
-            safeTextContent(elements.bestDepartmentName, data.best_department.name || 'N/A');
-            safeTextContent(elements.bestDepartmentScore, `${data.best_department.score || 'N/A'}`);
-        } else {
-            safeTextContent(elements.bestDepartmentName, 'N/A');
-            safeTextContent(elements.bestDepartmentScore, 'N/A');
-        }
-
-        if (data.worst_department) {
-            safeTextContent(elements.worstDepartmentName, data.worst_department.name || 'N/A');
-            safeTextContent(elements.worstDepartmentScore, `${data.worst_department.score || 'N/A'}`);
-        } else {
-            safeTextContent(elements.worstDepartmentName, 'N/A');
-            safeTextContent(elements.worstDepartmentScore, 'N/A');
-        }
-
-        if (elements.recentActivityBody) {
-            if (!data.recent_complaints.length) {
-                elements.recentActivityBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No recent activity for selected filters.</td></tr>';
-            } else {
-                elements.recentActivityBody.innerHTML = data.recent_complaints
-                    .map((item) => `<tr>
-                        <td data-label="Tracking ID"><code>${item.tracking_id || '-'}</code></td>
-                        <td data-label="Department">${item.department || '-'}</td>
-                        <td data-label="Service" class="d-none d-md-table-cell">${item.service || '-'}</td>
-                        <td data-label="Status"><span class="badge bg-${item.status_badge || 'secondary'}">${item.status || '-'}</span></td>
-                        <td data-label="Submitted">${item.submitted_at || '-'}</td>
-                    </tr>`)
-                    .join('');
+    document.addEventListener('DOMContentLoaded', function () {
+        const commonOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        boxWidth: 12,
+                        padding: 16,
+                        font: { family: 'Manrope' }
+                    }
+                }
             }
-        }
-
-        if (elements.updatedAt) {
-            const now = new Date();
-            elements.updatedAt.textContent = `Last updated: ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        }
-
-        renderDepartmentScoreboard(data.dept_stats || []);
-    }
-
-    function renderDepartmentScoreboard(departments) {
-        if (!elements.deptScoreboard) {
-            return;
-        }
-
-        if (!departments || !departments.length) {
-            elements.deptScoreboard.innerHTML = '<div class="col-12"><div class="text-muted">No department data available for current filters.</div></div>';
-            return;
-        }
-
-        elements.deptScoreboard.innerHTML = departments
-            .map((dept, index) => `
-                <div class="col-md-6 col-xl-4">
-                    <div class="dept-rank-card h-100">
-                        <div class="dept-rank-head mb-3">
-                            <div>
-                                <h6 class="fw-semibold mb-1">${dept.name || 'Department'}</h6>
-                                <p class="small text-muted mb-0">${dept.total || 0} total complaints</p>
-                            </div>
-                            <span class="dept-rank-badge">#${index + 1}</span>
-                        </div>
-                        <div class="row g-2 text-center mb-3">
-                            <div class="col-4"><div class="dept-rank-stat"><div class="fw-bold">${dept.pending || 0}</div><small class="text-muted">Pending</small></div></div>
-                            <div class="col-4"><div class="dept-rank-stat dept-rank-stat-success"><div class="fw-bold text-success">${dept.closed || 0}</div><small class="text-muted">Closed</small></div></div>
-                            <div class="col-4"><div class="dept-rank-stat dept-rank-stat-danger"><div class="fw-bold text-danger">${dept.delayed || 0}</div><small class="text-muted">Delayed</small></div></div>
-                        </div>
-                        <div class="d-flex justify-content-between small mb-1"><span>Resolution Rate</span><span class="fw-semibold">${dept.resolution_rate || 0}%</span></div>
-                        <div class="progress" style="height: 6px;"><div class="progress-bar bg-success" style="width: ${dept.resolution_rate || 0}%"></div></div>
-                        <div class="d-flex justify-content-between small mt-2"><span class="text-muted">Delay penalty ${dept.delay_penalty || 0}%</span><span class="fw-semibold">Score ${dept.score || 0}</span></div>
-                    </div>
-                </div>
-            `).join('');
-    }
-
-    function parseFilterParams() {
-        const params = new URLSearchParams();
-
-        if (elements.deptFilter && elements.deptFilter.value) {
-            params.set('department_id', elements.deptFilter.value);
-        }
-        if (elements.statusFilter && elements.statusFilter.value) {
-            params.set('status', elements.statusFilter.value);
-        }
-        if (elements.fromMonth && elements.fromMonth.value) {
-            params.set('from_month', elements.fromMonth.value);
-        }
-        if (elements.toMonth && elements.toMonth.value) {
-            params.set('to_month', elements.toMonth.value);
-        }
-
-        return params;
-    }
-
-    function buildEndpointUrl(endpoint) {
-        const params = parseFilterParams();
-        const query = params.toString();
-        return query ? `${endpoint}?${query}` : endpoint;
-    }
-
-    async function loadChart(config) {
-        const chartConfig = chartConfigs[config];
-        if (!chartConfig) {
-            return;
-        }
-
-        const canvasId = chartConfig.elementId;
-        const stateId = chartConfig.stateId;
-        const canvas = document.getElementById(canvasId);
-        if (!canvas || typeof Chart === 'undefined') {
-            return;
-        }
-
-        setChartState(stateId, true, 'Loading');
-
-        const endpoints = {
-            monthly: '/api/chart/monthly',
-            status: '/api/chart/status',
-            dept: '/api/chart/dept',
-            resolution: '/api/chart/resolution-time',
-            sla: '/api/chart/sla-compliance'
         };
 
-        try {
-            const response = await fetch(buildEndpointUrl(endpoints[config]));
-            if (!response.ok) {
-                throw new Error(`Chart request failed (${response.status})`);
-            }
-            const payload = await response.json();
-            const chartData = chartConfig.makeData(payload);
+        const statusBadgeMap = {
+            'Pending': 'badge-pending',
+            'Under Review': 'badge-review',
+            'Action Taken': 'badge-action',
+            'Delayed': 'badge-delayed',
+            'Reopened': 'badge-reopened',
+            'Closed': 'badge-closed'
+        };
 
-            destroyChart(charts[config]);
-            const common = { ...commonOptions };
-            if (chartConfig.type === 'doughnut') {
-                common.maintainAspectRatio = false;
-            }
+        const metricConfig = [
+            { id: 'metricTotal', key: 'total', decimals: 0 },
+            { id: 'metricPending', key: 'pending', decimals: 0 },
+            { id: 'metricInProgress', key: 'in_progress', decimals: 0 },
+            { id: 'metricResolved', key: 'closed', decimals: 0 },
+            { id: 'metricHighPriority', key: 'high_priority', decimals: 0 },
+            { id: 'metricSlaCompliance', key: 'sla_compliance', decimals: 2 }
+        ];
 
-            charts[config] = new Chart(canvas, {
-                type: chartConfig.type,
-                data: chartData,
-                options: common
+        const chartInstances = {};
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const noStoreHeaders = {
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache'
+        };
+        let activeOverviewController = null;
+        const activeChartControllers = {};
+        let dashboardRequestSeq = 0;
+
+        const filterEls = {
+            department: document.getElementById('dashboardDeptFilter'),
+            status: document.getElementById('dashboardStatusFilter'),
+            fromMonth: document.getElementById('dashboardFromMonth'),
+            toMonth: document.getElementById('dashboardToMonth'),
+            applyBtn: document.getElementById('dashboardApplyBtn'),
+            resetBtn: document.getElementById('dashboardResetBtn'),
+            error: document.getElementById('dashboardFilterError')
+        };
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function buildQuery(filters) {
+            const params = new URLSearchParams();
+            Object.keys(filters).forEach(function (key) {
+                const value = filters[key];
+                if (value !== null && value !== undefined && value !== '') {
+                    params.set(key, value);
+                }
             });
-
-            setChartState(stateId, false);
-        } catch (error) {
-            console.error('Chart load failed:', error);
-            setChartState(stateId, false);
-            const stateEl = document.getElementById(stateId);
-            if (stateEl) {
-                stateEl.classList.remove('d-none');
-                stateEl.innerHTML = '<i class="fas fa-exclamation-circle me-2"></i>Unable to load chart';
-            }
-        }
-    }
-
-    async function loadOverviewAndCharts() {
-        if (!elements.applyBtn) {
-            return;
+            return params.toString();
         }
 
-        setFilterError('');
-        elements.applyBtn.disabled = true;
-        elements.applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Applying';
+        function getActiveFilters() {
+            return {
+                department_id: filterEls.department?.value || '',
+                status: filterEls.status?.value || '',
+                from_month: filterEls.fromMonth?.value || '',
+                to_month: filterEls.toMonth?.value || ''
+            };
+        }
 
-        try {
-            const overviewResponse = await fetch(buildEndpointUrl('/api/dashboard/overview'));
-            if (!overviewResponse.ok) {
-                throw new Error(`Overview request failed (${overviewResponse.status})`);
+        function setFilterError(message) {
+            if (!filterEls.error) {
+                return;
             }
-            const payload = await overviewResponse.json();
-            applyOverviewPayload(payload);
+            if (!message) {
+                filterEls.error.classList.add('d-none');
+                filterEls.error.textContent = '';
+                return;
+            }
+            filterEls.error.classList.remove('d-none');
+            filterEls.error.textContent = message;
+        }
 
-            await Promise.all([
-                loadChart('monthly'),
-                loadChart('status'),
-                loadChart('dept'),
-                loadChart('resolution'),
-                loadChart('sla')
+        function validateFilters(filters) {
+            if (filters.from_month && filters.to_month && filters.from_month > filters.to_month) {
+                setFilterError('From month must be before or equal to To month.');
+                return false;
+            }
+            setFilterError('');
+            return true;
+        }
+
+        function setChartState(stateId, message, isError = false) {
+            const el = document.getElementById(stateId);
+            if (!el) {
+                return;
+            }
+            if (!message) {
+                el.classList.add('d-none');
+                return;
+            }
+            el.classList.remove('d-none');
+            el.classList.toggle('chart-error', isError);
+            el.innerHTML = isError
+                ? `<i class="fas fa-triangle-exclamation me-2"></i>${message}`
+                : `<i class="fas fa-spinner fa-spin me-2"></i>${message}`;
+        }
+
+        function createOrUpdateChart(key, canvasId, config) {
+            if (chartInstances[key]) {
+                chartInstances[key].destroy();
+            }
+            chartInstances[key] = new Chart(document.getElementById(canvasId), config);
+        }
+
+        function loadChart(url, stateId, key, renderer, filters, requestId) {
+            const query = buildQuery(filters || {});
+            const cacheBuster = `_=${Date.now()}`;
+            const endpoint = query ? `${url}?${query}&${cacheBuster}` : `${url}?${cacheBuster}`;
+            const controller = new AbortController();
+
+            if (activeChartControllers[key]) {
+                activeChartControllers[key].abort();
+            }
+            activeChartControllers[key] = controller;
+
+            setChartState(stateId, 'Loading chart data...');
+
+            return fetch(endpoint, {
+                cache: 'no-store',
+                headers: noStoreHeaders,
+                signal: controller.signal
+            })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error(`Failed to load: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    if (requestId !== dashboardRequestSeq) {
+                        return false;
+                    }
+                    renderer(data, key);
+                    setChartState(stateId, '');
+                    return true;
+                })
+                .catch(function (error) {
+                    if (error?.name === 'AbortError' || requestId !== dashboardRequestSeq) {
+                        return false;
+                    }
+                    setChartState(stateId, 'Unable to load chart data right now.', true);
+                    return false;
+                })
+                .finally(function () {
+                    if (activeChartControllers[key] === controller) {
+                        delete activeChartControllers[key];
+                    }
+                });
+        }
+
+        function formatDashboardTimestamp() {
+            const now = new Date();
+            return new Intl.DateTimeFormat('en-IN', {
+                dateStyle: 'medium',
+                timeStyle: 'short'
+            }).format(now);
+        }
+
+        function initExportMonthControl() {
+            const monthInput = document.getElementById('exportMonth');
+            const exportBtn = document.getElementById('exportCsvBtn');
+            if (!monthInput || !exportBtn) {
+                return;
+            }
+
+            const now = new Date();
+            const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            monthInput.value = currentMonth;
+
+            function syncHref() {
+                const monthValue = monthInput.value || currentMonth;
+                exportBtn.href = `/api/public/export/monthly.csv?month=${encodeURIComponent(monthValue)}`;
+            }
+
+            monthInput.addEventListener('change', syncHref);
+            syncHref();
+        }
+
+        function animateValue(el, target, decimals = 0) {
+            if (!el) {
+                return;
+            }
+
+            const safeTarget = Number(target || 0);
+            const startValue = Number(el.dataset.value || 0);
+
+            if (prefersReducedMotion) {
+                el.textContent = decimals > 0 ? safeTarget.toFixed(decimals) : Math.round(safeTarget).toString();
+                el.dataset.value = safeTarget.toString();
+                return;
+            }
+
+            const startTs = performance.now();
+            const duration = 650;
+
+            function step(ts) {
+                const progress = Math.min((ts - startTs) / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const current = startValue + ((safeTarget - startValue) * eased);
+                el.textContent = decimals > 0 ? current.toFixed(decimals) : Math.round(current).toString();
+
+                if (progress < 1) {
+                    requestAnimationFrame(step);
+                    return;
+                }
+                el.dataset.value = safeTarget.toString();
+            }
+
+            requestAnimationFrame(step);
+        }
+
+        function initMetricCounters() {
+            metricConfig.forEach(function (item) {
+                const el = document.getElementById(item.id);
+                if (!el) {
+                    return;
+                }
+                const target = Number(el.getAttribute('data-count') || el.textContent || 0);
+                el.dataset.value = '0';
+                animateValue(el, target, item.decimals);
+            });
+        }
+
+        function updateMetrics(stats) {
+            metricConfig.forEach(function (item) {
+                const value = Number(stats[item.key] || 0);
+                animateValue(document.getElementById(item.id), value, item.decimals);
+            });
+        }
+
+        function updateInsightCards(stats, activeDepartments) {
+            const delayedEl = document.getElementById('insightDelayedValue');
+            const reopenedEl = document.getElementById('insightReopenedValue');
+            const backlogEl = document.getElementById('insightBacklogValue');
+            const activeDeptPill = document.getElementById('activeDepartmentsPill');
+            const sentimentNegative = document.getElementById('sentimentNegative');
+            const sentimentUrgent = document.getElementById('sentimentUrgent');
+            const sentimentRepeated = document.getElementById('sentimentRepeated');
+            const qualityAvgResolution = document.getElementById('qualityAvgResolution');
+            const qualityFeedbackRate = document.getElementById('qualityFeedbackRate');
+
+            if (delayedEl) {
+                delayedEl.textContent = `${stats.delayed || 0} delayed complaints`;
+            }
+            if (reopenedEl) {
+                reopenedEl.textContent = `${stats.reopened || 0} reopened complaints`;
+            }
+            if (backlogEl) {
+                const backlog = Number(stats.backlog_rate || 0);
+                backlogEl.textContent = `${backlog.toFixed(2)}%`;
+            }
+            if (activeDeptPill) {
+                activeDeptPill.innerHTML = `<i class="fas fa-circle-check me-1"></i>${activeDepartments || 0} active departments`;
+            }
+            if (sentimentNegative) {
+                sentimentNegative.textContent = `${Number(stats.negative_percent || 0).toFixed(2)}%`;
+            }
+            if (sentimentUrgent) {
+                sentimentUrgent.textContent = `${Number(stats.urgent_percent || 0).toFixed(2)}%`;
+            }
+            if (sentimentRepeated) {
+                sentimentRepeated.textContent = `${Number(stats.repeated_percent || 0).toFixed(2)}%`;
+            }
+            if (qualityAvgResolution) {
+                qualityAvgResolution.textContent = `${Number(stats.avg_resolution_hours || 0).toFixed(2)} hrs`;
+            }
+            if (qualityFeedbackRate) {
+                qualityFeedbackRate.textContent = `${Number(stats.feedback_rate || 0).toFixed(2)}%`;
+            }
+        }
+
+        function updateBestWorstDepartments(bestDepartment, worstDepartment) {
+            const bestName = document.getElementById('bestDepartmentName');
+            const bestScore = document.getElementById('bestDepartmentScore');
+            const worstName = document.getElementById('worstDepartmentName');
+            const worstScore = document.getElementById('worstDepartmentScore');
+
+            if (bestName) {
+                bestName.textContent = bestDepartment?.name || 'N/A';
+            }
+            if (bestScore) {
+                bestScore.textContent = bestDepartment ? bestDepartment.score : 'N/A';
+            }
+            if (worstName) {
+                worstName.textContent = worstDepartment?.name || 'N/A';
+            }
+            if (worstScore) {
+                worstScore.textContent = worstDepartment ? worstDepartment.score : 'N/A';
+            }
+        }
+
+        function renderDeptScoreboard(deptStats) {
+            const grid = document.getElementById('deptScoreboardGrid');
+            if (!grid) {
+                return;
+            }
+
+            if (!Array.isArray(deptStats) || !deptStats.length) {
+                grid.innerHTML = '<div class="col-12"><div class="alert alert-warning mb-0">No department records match the selected filters.</div></div>';
+                return;
+            }
+
+            const html = deptStats.map(function (dept, index) {
+                const resolutionRate = Number(dept.resolution_rate || 0);
+                return `
+                    <div class="col-md-6 col-xl-4">
+                        <div class="dept-rank-card h-100">
+                            <div class="dept-rank-head mb-3">
+                                <div>
+                                    <h6 class="fw-semibold mb-1">${escapeHtml(dept.name)}</h6>
+                                    <p class="small text-muted mb-0">${Number(dept.total || 0)} total complaints</p>
+                                </div>
+                                <span class="dept-rank-badge">#${index + 1}</span>
+                            </div>
+                            <div class="row g-2 text-center mb-3">
+                                <div class="col-4"><div class="dept-rank-stat"><div class="fw-bold">${Number(dept.pending || 0)}</div><small class="text-muted">Pending</small></div></div>
+                                <div class="col-4"><div class="dept-rank-stat dept-rank-stat-success"><div class="fw-bold text-success">${Number(dept.closed || 0)}</div><small class="text-muted">Closed</small></div></div>
+                                <div class="col-4"><div class="dept-rank-stat dept-rank-stat-danger"><div class="fw-bold text-danger">${Number(dept.delayed || 0)}</div><small class="text-muted">Delayed</small></div></div>
+                            </div>
+                            <div class="d-flex justify-content-between small mb-1"><span>Resolution Rate</span><span class="fw-semibold">${resolutionRate.toFixed(1)}%</span></div>
+                            <div class="progress" style="height: 6px;"><div class="progress-bar bg-success" style="width: ${Math.max(0, Math.min(100, resolutionRate))}%"></div></div>
+                            <div class="d-flex justify-content-between small mt-2"><span class="text-muted">Delay penalty ${Number(dept.delay_penalty || 0).toFixed(1)}%</span><span class="fw-semibold">Score ${Number(dept.score || 0).toFixed(1)}</span></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            grid.innerHTML = html;
+        }
+
+        function renderTopServices(topServices) {
+            const container = document.getElementById('topServicesPanel');
+            if (!container) {
+                return;
+            }
+
+            if (!Array.isArray(topServices) || !topServices.length) {
+                container.innerHTML = '<p class="small text-muted mb-0">No service activity yet.</p>';
+                return;
+            }
+
+            const html = topServices
+                .slice(0, 6)
+                .map(function (item) {
+                    const count = Number(item.count || 0);
+                    const name = escapeHtml(item.name || 'Unknown Service');
+                    return (
+                        `<div class="dashboard-insight-row">`
+                        + `<span class="small text-muted text-truncate d-inline-block" style="max-width: 190px;">${name}</span>`
+                        + `<strong>${count}</strong>`
+                        + `</div>`
+                    );
+                })
+                .join('');
+
+            container.innerHTML = html;
+        }
+
+        function renderRecentActivity(rows) {
+            const tbody = document.getElementById('recentActivityBody');
+            if (!tbody) {
+                return;
+            }
+
+            if (!Array.isArray(rows) || !rows.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No recent activity for current selection.</td></tr>';
+                return;
+            }
+
+            const html = rows.map(function (item) {
+                const badgeClass = item.status_badge || statusBadgeMap[item.status] || 'badge-secondary';
+                return `
+                    <tr>
+                        <td><code>${escapeHtml(item.tracking_id)}</code></td>
+                        <td>${escapeHtml(item.department)}</td>
+                        <td>${escapeHtml(item.service)}</td>
+                        <td><span class="badge bg-${badgeClass}">${escapeHtml(item.status)}</span></td>
+                        <td>${escapeHtml(item.submitted_at)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            tbody.innerHTML = html;
+        }
+
+        function applyOverviewPayload(payload) {
+            const stats = payload?.stats || {};
+            updateMetrics(stats);
+            updateInsightCards(stats, payload?.active_departments || 0);
+            updateBestWorstDepartments(payload?.best_department, payload?.worst_department);
+            renderDeptScoreboard(payload?.dept_stats || []);
+            renderRecentActivity(payload?.recent_complaints || []);
+            renderTopServices(payload?.top_services || []);
+        }
+
+        function fetchOverview(filters, requestId) {
+            const query = buildQuery(filters);
+            const cacheBuster = `_=${Date.now()}`;
+            const endpoint = query
+                ? `/api/dashboard/overview?${query}&${cacheBuster}`
+                : `/api/dashboard/overview?${cacheBuster}`;
+            const controller = new AbortController();
+
+            if (activeOverviewController) {
+                activeOverviewController.abort();
+            }
+            activeOverviewController = controller;
+
+            return fetch(endpoint, {
+                cache: 'no-store',
+                headers: noStoreHeaders,
+                signal: controller.signal
+            })
+                .then(function (response) {
+                    return response.json().catch(function () { return {}; }).then(function (payload) {
+                        if (!response.ok) {
+                            throw new Error(payload.error || 'Unable to load filtered overview.');
+                        }
+                        if (requestId !== dashboardRequestSeq) {
+                            return false;
+                        }
+                        applyOverviewPayload(payload);
+                        return true;
+                    });
+                })
+                .catch(function (error) {
+                    if (error?.name === 'AbortError' || requestId !== dashboardRequestSeq) {
+                        return false;
+                    }
+                    throw error;
+                })
+                .finally(function () {
+                    if (activeOverviewController === controller) {
+                        activeOverviewController = null;
+                    }
+                });
+        }
+        function renderMonthlyChart(data, key) {
+            const canvas = document.getElementById('monthlyChart');
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createLinearGradient(0, 0, 0, 320);
+            gradient.addColorStop(0, 'rgba(11, 94, 215, 0.24)');
+            gradient.addColorStop(1, 'rgba(11, 94, 215, 0.02)');
+
+            createOrUpdateChart(key, 'monthlyChart', {
+                type: 'line',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'Complaints',
+                        data: data.data,
+                        borderColor: '#0b5ed7',
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                        fill: true,
+                        tension: 0.35
+                    }]
+                },
+                options: {
+                    ...commonOptions,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { stepSize: 1 }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderStatusChart(data, key) {
+            createOrUpdateChart(key, 'statusChart', {
+                type: 'doughnut',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        data: data.data,
+                        backgroundColor: ['#f59e0b', '#06b6d4', '#0b5ed7', '#ef4444', '#64748b', '#16a34a'],
+                        borderWidth: 0
+                    }]
+                },
+                options: commonOptions
+            });
+        }
+
+        function renderDeptChart(data, key) {
+            createOrUpdateChart(key, 'deptChart', {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'Total Complaints',
+                        data: data.data,
+                        backgroundColor: 'rgba(11, 94, 215, 0.85)',
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    ...commonOptions,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { stepSize: 1 }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderResolutionTimeChart(data, key) {
+            createOrUpdateChart(key, 'resolutionTimeChart', {
+                type: 'line',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'Avg Hours',
+                        data: data.data,
+                        borderColor: '#0891b2',
+                        backgroundColor: 'rgba(8, 145, 178, 0.15)',
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    ...commonOptions,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        function renderSlaComplianceChart(data, key) {
+            createOrUpdateChart(key, 'slaComplianceChart', {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'SLA %',
+                        data: data.data,
+                        backgroundColor: 'rgba(16, 185, 129, 0.86)',
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    ...commonOptions,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+
+        function refreshCharts(filters, requestId) {
+            return Promise.allSettled([
+                loadChart('/api/chart/monthly', 'monthlyChartState', 'monthly', renderMonthlyChart, filters, requestId),
+                loadChart('/api/chart/status', 'statusChartState', 'status', renderStatusChart, filters, requestId),
+                loadChart('/api/chart/dept', 'deptChartState', 'dept', renderDeptChart, filters, requestId),
+                loadChart('/api/chart/resolution-time', 'resolutionTimeChartState', 'resolutionTime', renderResolutionTimeChart, filters, requestId),
+                loadChart('/api/chart/sla-compliance', 'slaComplianceChartState', 'slaCompliance', renderSlaComplianceChart, filters, requestId)
             ]);
-        } catch (error) {
-            console.error(error);
-            setFilterError('Unable to load dashboard data. Please retry.');
-        } finally {
-            elements.applyBtn.disabled = false;
-            elements.applyBtn.innerHTML = '<i class="fas fa-filter me-1"></i>Apply';
         }
-    }
 
-    function resetFilters() {
-        if (elements.deptFilter) {
-            elements.deptFilter.value = '';
-        }
-        if (elements.statusFilter) {
-            elements.statusFilter.value = '';
-        }
-        if (elements.fromMonth) {
-            elements.fromMonth.value = '';
-        }
-        if (elements.toMonth) {
-            elements.toMonth.value = '';
-        }
-        loadOverviewAndCharts();
-    }
+        function setFilterLoading(isLoading) {
+            if (!filterEls.applyBtn || !filterEls.resetBtn) {
+                return;
+            }
 
-    elements.applyBtn?.addEventListener('click', loadOverviewAndCharts);
-    elements.resetBtn?.addEventListener('click', resetFilters);
+            filterEls.applyBtn.disabled = isLoading;
+            filterEls.resetBtn.disabled = isLoading;
+            if (isLoading) {
+                filterEls.applyBtn.dataset.originalHtml = filterEls.applyBtn.innerHTML;
+                filterEls.applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Applying';
+            } else if (filterEls.applyBtn.dataset.originalHtml) {
+                filterEls.applyBtn.innerHTML = filterEls.applyBtn.dataset.originalHtml;
+            }
+        }
 
-    if (elements.applyBtn) {
-        elements.applyBtn.click();
-    } else {
-        loadOverviewAndCharts();
-    }
-});
+        function updateDashboardTimestamp() {
+            const updated = document.getElementById('dashboardUpdatedAt');
+            if (updated) {
+                updated.textContent = `Updated: ${formatDashboardTimestamp()}`;
+            }
+        }
+
+        function applyDashboardFilters() {
+            const filters = getActiveFilters();
+            if (!validateFilters(filters)) {
+                return;
+            }
+
+            const requestId = ++dashboardRequestSeq;
+            setFilterLoading(true);
+            Promise.all([fetchOverview(filters, requestId), refreshCharts(filters, requestId)])
+                .catch(function (error) {
+                    setFilterError(error.message || 'Unable to apply filters right now.');
+                })
+                .finally(function () {
+                    if (requestId === dashboardRequestSeq) {
+                        setFilterLoading(false);
+                        updateDashboardTimestamp();
+                    }
+                });
+        }
+
+        function resetDashboardFilters() {
+            if (filterEls.department) {
+                filterEls.department.value = '';
+            }
+            if (filterEls.status) {
+                filterEls.status.value = '';
+            }
+            if (filterEls.fromMonth) {
+                filterEls.fromMonth.value = '';
+            }
+            if (filterEls.toMonth) {
+                filterEls.toMonth.value = '';
+            }
+            setFilterError('');
+            applyDashboardFilters();
+        }
+
+        initExportMonthControl();
+        initMetricCounters();
+
+        if (filterEls.applyBtn) {
+            filterEls.applyBtn.addEventListener('click', applyDashboardFilters);
+        }
+        if (filterEls.resetBtn) {
+            filterEls.resetBtn.addEventListener('click', resetDashboardFilters);
+        }
+
+        applyDashboardFilters();
+    });
+})();

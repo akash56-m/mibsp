@@ -8,7 +8,7 @@ import time
 import threading
 from collections import deque
 from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app, Response
-from sqlalchemy import text, func, case, and_
+from sqlalchemy import text, func
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
 
@@ -22,8 +22,6 @@ from app.utils import (
 public_bp = Blueprint('public', __name__)
 _ai_rate_lock = threading.Lock()
 _ai_rate_buckets = {}
-_response_cache_lock = threading.Lock()
-_response_cache = {}
 
 DASHBOARD_STATUSES = ['Pending', 'Under Review', 'Action Taken', 'Delayed', 'Reopened', 'Closed']
 STATUS_BADGE_CLASSES = {
@@ -34,69 +32,6 @@ STATUS_BADGE_CLASSES = {
     'Reopened': 'badge-reopened',
     'Closed': 'badge-closed',
 }
-
-
-def _filters_cache_key(filters):
-    """Create stable cache key tuple for dashboard filters."""
-    return (
-        filters.get('department_id') or 0,
-        filters.get('status') or '',
-        filters.get('from_month') or '',
-        filters.get('to_month') or '',
-    )
-
-
-def _cache_ttl(multiplier=1.0):
-    """Resolve API response cache TTL from app config."""
-    base_ttl = int(current_app.config.get('API_RESPONSE_CACHE_TTL_SECONDS', 12))
-    return max(1, int(base_ttl * multiplier))
-
-
-def _cache_get(cache_key):
-    """Return cached payload when present and fresh."""
-    now_ts = time.time()
-    with _response_cache_lock:
-        entry = _response_cache.get(cache_key)
-        if not entry:
-            return None
-        if entry['expires_at'] < now_ts:
-            _response_cache.pop(cache_key, None)
-            return None
-        return entry['payload']
-
-
-def _cache_set(cache_key, payload, ttl_seconds):
-    """Store API payload in short-lived in-memory cache."""
-    expires_at = time.time() + max(1, int(ttl_seconds))
-    with _response_cache_lock:
-        _response_cache[cache_key] = {
-            'payload': payload,
-            'expires_at': expires_at,
-        }
-
-        # Keep cache bounded in memory for long-running workers.
-        if len(_response_cache) > 600:
-            now_ts = time.time()
-            stale_keys = [key for key, entry in _response_cache.items() if entry['expires_at'] < now_ts]
-            for key in stale_keys:
-                _response_cache.pop(key, None)
-            if len(_response_cache) > 600:
-                for key in list(_response_cache.keys())[:120]:
-                    _response_cache.pop(key, None)
-
-
-def _invalidate_response_cache():
-    """Drop cached response payloads after writes."""
-    with _response_cache_lock:
-        _response_cache.clear()
-
-
-def _json_no_store(payload):
-    """Return JSON response with no-store headers for real-time endpoints."""
-    response = jsonify(payload)
-    response.headers['Cache-Control'] = 'no-store, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    return response
 
 
 def _get_client_ip():
@@ -222,29 +157,6 @@ def _fallback_ai_reply(assistant_mode, message, description, department_name, se
     return _fallback_draft_reply(message, description, department_name, service_name)
 
 
-def _parse_optional_coordinate(raw_value, label, min_value, max_value):
-    """
-    Parse optional coordinate value.
-    Accepts decimal commas and returns (value, error_message).
-    """
-    if raw_value is None:
-        return None, None
-    text_value = str(raw_value).strip()
-    if not text_value:
-        return None, None
-
-    normalized = text_value.replace(',', '.')
-    try:
-        numeric_value = float(normalized)
-    except (TypeError, ValueError):
-        return None, f'{label} must be a valid number.'
-
-    if numeric_value < min_value or numeric_value > max_value:
-        return None, f'{label} must be between {min_value} and {max_value}.'
-
-    return numeric_value, None
-
-
 def _month_start(value):
     """Normalize datetime to month start."""
     return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -267,6 +179,69 @@ def _parse_month_value(raw):
         return _month_start(parsed)
     except ValueError:
         return None
+
+
+def _parse_optional_coordinate(raw, field_name):
+    """Parse optional coordinate input and return float value."""
+    if raw is None:
+        return None
+
+    text_value = str(raw).strip()
+    if not text_value:
+        return None
+
+    normalized = text_value.replace(',', '.')
+    try:
+        return float(normalized)
+    except (TypeError, ValueError):
+        raise ValueError(f'{field_name} must be a valid number.')
+
+
+def _parse_geo_filter_value(raw):
+    """Normalize optional geo filter inputs to lowercase/trimmed values."""
+    text_value = (raw or '').strip()
+    if not text_value:
+        return None
+    return text_value
+
+
+def _parse_geo_filters():
+    """Parse and normalize query filters for geolocation endpoints."""
+    status = _parse_geo_filter_value(request.args.get('status'))
+    if status and status != 'all' and status not in DASHBOARD_STATUSES:
+        raise ValueError('Invalid status filter.')
+
+    priority = _parse_geo_filter_value(request.args.get('priority'))
+    if priority and priority not in ('Normal', 'High'):
+        raise ValueError('Invalid priority filter.')
+
+    state = _parse_geo_filter_value(request.args.get('state'))
+    district = _parse_geo_filter_value(request.args.get('district'))
+    city = _parse_geo_filter_value(request.args.get('city'))
+
+    limit = request.args.get('limit', type=int)
+    max_points = int(current_app.config.get('GEO_HEATMAP_MAX_POINTS', 2500))
+    if limit is None or limit <= 0:
+        limit = max_points
+    limit = min(limit, max_points * 2)
+    return {
+        'status': status or None,
+        'priority': priority or None,
+        'state': state or None,
+        'district': district or None,
+        'city': city or None,
+        'limit': limit
+    }
+
+
+def _no_cache_json(payload, status=200):
+    """Return JSON response with browser/proxy no-cache headers."""
+    response = jsonify(payload)
+    response.status_code = status
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 def _iter_month_starts(from_month_start, to_month_start):
@@ -352,43 +327,40 @@ def _apply_dashboard_filters(query, filters, date_field=Complaint.submitted_at, 
 
 def _compute_dashboard_stats(filters):
     """Compute aggregate dashboard stats for current filter set."""
-    row = _apply_dashboard_filters(
-        db.session.query(
-            func.count(Complaint.id).label('total'),
-            func.sum(case((Complaint.status == 'Pending', 1), else_=0)).label('pending'),
-            func.sum(case((Complaint.status == 'Under Review', 1), else_=0)).label('under_review'),
-            func.sum(case((Complaint.status == 'Action Taken', 1), else_=0)).label('action_taken'),
-            func.sum(case((Complaint.status == 'Delayed', 1), else_=0)).label('delayed'),
-            func.sum(case((Complaint.status == 'Reopened', 1), else_=0)).label('reopened'),
-            func.sum(case((Complaint.status == 'Closed', 1), else_=0)).label('closed'),
-            func.sum(case((Complaint.priority == 'High', 1), else_=0)).label('high_priority'),
-            func.sum(case((
-                and_(
-                    Complaint.status == 'Closed',
-                    Complaint.sla_due_at.isnot(None),
-                    Complaint.resolved_at.isnot(None),
-                    Complaint.resolved_at <= Complaint.sla_due_at
-                ),
-                1
-            ), else_=0)).label('within_sla')
-        ),
-        filters,
-        include_time_window=True
-    ).one()
+    base_query = _apply_dashboard_filters(Complaint.query, filters, include_time_window=True)
 
-    total = int(row.total or 0)
-    pending = int(row.pending or 0)
-    under_review = int(row.under_review or 0)
-    action_taken = int(row.action_taken or 0)
-    delayed = int(row.delayed or 0)
-    reopened = int(row.reopened or 0)
-    closed = int(row.closed or 0)
-    high_priority = int(row.high_priority or 0)
-    within_sla = int(row.within_sla or 0)
-    sla_compliance = round((within_sla / closed * 100), 2) if closed else 0
+    total = base_query.count()
+    pending = base_query.filter(Complaint.status == 'Pending').count()
+    under_review = base_query.filter(Complaint.status == 'Under Review').count()
+    action_taken = base_query.filter(Complaint.status == 'Action Taken').count()
+    delayed = base_query.filter(Complaint.status == 'Delayed').count()
+    reopened = base_query.filter(Complaint.status == 'Reopened').count()
+    closed = base_query.filter(Complaint.status == 'Closed').count()
+    high_priority = base_query.filter(Complaint.priority == 'High').count()
+
+    closed_items = base_query.filter(Complaint.status == 'Closed').all()
+    within_sla = sum(
+        1 for item in closed_items
+        if item.sla_due_at and item.resolved_at and item.resolved_at <= item.sla_due_at
+    )
+    sla_compliance = round((within_sla / len(closed_items) * 100), 2) if closed_items else 0
     resolution_rate = round((closed / total * 100), 2) if total > 0 else 0
     in_progress = under_review + action_taken + delayed + reopened
     backlog_rate = round(((pending + in_progress) / total * 100), 2) if total > 0 else 0
+
+    negative = base_query.filter(Complaint.ai_sentiment == 'negative').count()
+    urgent = base_query.filter(Complaint.priority == 'High').count()
+    repeated = base_query.filter(Complaint.reopen_count > 0).count()
+    closed_with_feedback = sum(1 for complaint in closed_items if complaint.citizen_rating is not None)
+    avg_resolution_hours = (
+        round(sum(
+            complaint.get_resolution_time()
+            for complaint in closed_items
+            if complaint.get_resolution_time()
+        ) / len(closed_items), 2)
+        if closed_items else 0
+    )
+    closed_feedback_rate = round((closed_with_feedback / len(closed_items) * 100), 2) if closed_items else 0
 
     return {
         'total': total,
@@ -403,6 +375,11 @@ def _compute_dashboard_stats(filters):
         'resolution_rate': resolution_rate,
         'in_progress': in_progress,
         'backlog_rate': backlog_rate,
+        'negative_percent': round((negative / total * 100), 2) if total > 0 else 0,
+        'urgent_percent': round((urgent / total * 100), 2) if total > 0 else 0,
+        'repeated_percent': round((repeated / total * 100), 2) if total > 0 else 0,
+        'avg_resolution_hours': avg_resolution_hours,
+        'feedback_rate': closed_feedback_rate
     }
 
 
@@ -412,29 +389,18 @@ def _compute_department_stats(filters):
     if filters.get('department_id'):
         departments_query = departments_query.filter(Department.id == filters['department_id'])
     departments = departments_query.all()
-    if not departments:
-        return [], None, None
-
-    aggregated_rows = _apply_dashboard_filters(
-        db.session.query(
-            Complaint.department_id.label('department_id'),
-            func.count(Complaint.id).label('total'),
-            func.sum(case((Complaint.status == 'Pending', 1), else_=0)).label('pending'),
-            func.sum(case((Complaint.status == 'Closed', 1), else_=0)).label('closed'),
-            func.sum(case((Complaint.status == 'Delayed', 1), else_=0)).label('delayed')
-        ),
-        filters,
-        include_time_window=True
-    ).group_by(Complaint.department_id).all()
-    row_by_department = {int(row.department_id): row for row in aggregated_rows}
 
     dept_stats = []
     for dept in departments:
-        row = row_by_department.get(int(dept.id))
-        total = int(row.total or 0) if row else 0
-        pending = int(row.pending or 0) if row else 0
-        closed = int(row.closed or 0) if row else 0
-        delayed = int(row.delayed or 0) if row else 0
+        dept_query = _apply_dashboard_filters(
+            Complaint.query.filter(Complaint.department_id == dept.id),
+            filters,
+            include_time_window=True
+        )
+        total = dept_query.count()
+        pending = dept_query.filter(Complaint.status == 'Pending').count()
+        closed = dept_query.filter(Complaint.status == 'Closed').count()
+        delayed = dept_query.filter(Complaint.status == 'Delayed').count()
         resolution_rate = round((closed / total * 100), 1) if total > 0 else 0
         delay_penalty = round((delayed / total * 100) * 0.5, 1) if total > 0 else 0
         transparency_score = round(max(resolution_rate - delay_penalty, 0), 1)
@@ -460,6 +426,25 @@ def _compute_department_stats(filters):
     worst_department = ranked[-1] if ranked else None
 
     return dept_stats, best_department, worst_department
+
+
+def _compute_top_services(filters, limit=6):
+    """Compute top services for trends and scoreboard sections."""
+    base_query = _apply_dashboard_filters(Complaint.query, filters, include_time_window=True)
+
+    rows = (
+        base_query.join(Service, Complaint.service_id == Service.id)
+        .with_entities(
+            Service.name.label('service_name'),
+            func.count(Complaint.id).label('count')
+        )
+        .group_by(Service.id, Service.name)
+        .order_by(func.count(Complaint.id).desc(), Service.name.asc())
+        .limit(limit)
+        .all()
+    )
+
+    return [{'name': row.service_name, 'count': row.count} for row in rows]
 
 
 # =============================================================================
@@ -512,12 +497,6 @@ def geo_heatmap():
     return render_template('public/geo_heatmap.html', stats=stats)
 
 
-@public_bp.route('/public/geo-heatmap')
-def geo_heatmap_legacy():
-    """Backward-compatible path for older deep links."""
-    return redirect(url_for('public.geo_heatmap'))
-
-
 # =============================================================================
 # COMPLAINT SUBMISSION
 # =============================================================================
@@ -533,18 +512,65 @@ def submit_complaint():
         department_id = request.form.get('department_id', type=int)
         service_id = request.form.get('service_id', type=int)
         description = request.form.get('description', '').strip()
-        location_lat_raw = request.form.get('location_lat')
-        location_lng_raw = request.form.get('location_lng')
-        location_lat, lat_error = _parse_optional_coordinate(
-            location_lat_raw, 'Latitude', -90, 90
-        )
-        location_lng, lng_error = _parse_optional_coordinate(
-            location_lng_raw, 'Longitude', -180, 180
-        )
         state = (request.form.get('state') or '').strip() or None
         district = (request.form.get('district') or '').strip() or None
         city = (request.form.get('city') or '').strip() or None
-        
+
+        try:
+            location_lat = _parse_optional_coordinate(
+                request.form.get('location_lat'),
+                'Latitude'
+            )
+            location_lng = _parse_optional_coordinate(
+                request.form.get('location_lng'),
+                'Longitude'
+            )
+        except ValueError as exc:
+            flash(str(exc), 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+        # Ensure coordinate pair is either both present or both absent.
+        if (location_lat is None) != (location_lng is None):
+            flash('Latitude and longitude must be provided together.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+
+        # Optional geo validation
+        if state and len(state) > 80:
+            flash('State must be 80 characters or fewer.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+        if district and len(district) > 120:
+            flash('District must be 120 characters or fewer.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+        if city and len(city) > 120:
+            flash('City must be 120 characters or fewer.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+        if location_lat is not None and not (-90 <= location_lat <= 90):
+            flash('Latitude must be between -90 and 90.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+        if location_lng is not None and not (-180 <= location_lng <= 180):
+            flash('Longitude must be between -180 and 180.', 'danger')
+            departments = Department.query.all()
+            return render_template('public/submit.html',
+                                  departments=departments,
+                                  form_data=request.form)
+
         # Server-side validation
         errors = []
         service = None
@@ -564,20 +590,6 @@ def submit_complaint():
             if not service or service.department_id != department_id:
                 errors.append('Invalid service selection for this department.')
 
-        # Optional geo validation
-        if lat_error:
-            errors.append(lat_error)
-        if lng_error:
-            errors.append(lng_error)
-        if (location_lat is None) ^ (location_lng is None):
-            errors.append('Provide both latitude and longitude together.')
-        if state and len(state) > 80:
-            errors.append('State must be 80 characters or fewer.')
-        if district and len(district) > 120:
-            errors.append('District must be 120 characters or fewer.')
-        if city and len(city) > 120:
-            errors.append('City must be 120 characters or fewer.')
-        
         if errors:
             for error in errors:
                 flash(error, 'danger')
@@ -630,7 +642,6 @@ def submit_complaint():
             
             db.session.add(complaint)
             db.session.commit()
-            _invalidate_response_cache()
             
             # Log the submission (anonymous - no user)
             log_action('COMPLAINT_SUBMITTED', 
@@ -733,7 +744,6 @@ def reopen_complaint(tracking_id):
         return redirect(url_for('public.track_complaint', tracking_id=tracking_id))
 
     db.session.commit()
-    _invalidate_response_cache()
     log_action('COMPLAINT_REOPENED_BY_CITIZEN', details={
         'tracking_id': tracking_id,
         'reopen_count': complaint.reopen_count
@@ -759,7 +769,6 @@ def submit_feedback(tracking_id):
         return redirect(url_for('public.track_complaint', tracking_id=tracking_id))
 
     db.session.commit()
-    _invalidate_response_cache()
     log_action('CITIZEN_FEEDBACK_SUBMITTED', details={
         'tracking_id': tracking_id,
         'rating': complaint.citizen_rating
@@ -792,6 +801,7 @@ def public_dashboard():
 
     stats = _compute_dashboard_stats(default_filters)
     dept_stats, best_department, worst_department = _compute_department_stats(default_filters)
+    top_services = _compute_top_services(default_filters, limit=6)
     
     # Recent activity (last 30 days)
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
@@ -802,16 +812,11 @@ def public_dashboard():
     return render_template('public/dashboard.html',
                           stats=stats,
                           dept_stats=dept_stats,
+                          top_services=top_services,
                           best_department=best_department,
                           worst_department=worst_department,
                           recent_complaints=recent_complaints,
                           status_options=DASHBOARD_STATUSES)
-
-
-@public_bp.route('/public/dashboard')
-def public_dashboard_legacy():
-    """Backward-compatible path for older deep links."""
-    return redirect(url_for('public.public_dashboard'))
 
 
 # =============================================================================
@@ -832,14 +837,7 @@ def get_services(department_id):
 def get_stats():
     """API endpoint for statistics (used by charts)."""
     maybe_run_sla_escalations()
-    cache_key = ('stats',)
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    payload = Complaint.get_stats()
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    return jsonify(Complaint.get_stats())
 
 
 @public_bp.route('/api/dashboard/overview')
@@ -852,13 +850,9 @@ def get_dashboard_overview():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    cache_key = ('overview', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
     stats = _compute_dashboard_stats(filters)
     dept_stats, best_department, worst_department = _compute_department_stats(filters)
+    top_services = _compute_top_services(filters)
     ranked_departments = sorted(
         dept_stats,
         key=lambda item: (item['score'], item['total']),
@@ -889,7 +883,7 @@ def get_dashboard_overview():
             )
         })
 
-    payload = {
+    return _no_cache_json({
         'filters': {
             'department_id': filters.get('department_id'),
             'status': filters.get('status') or '',
@@ -897,14 +891,13 @@ def get_dashboard_overview():
             'to_month': filters.get('to_month') or '',
         },
         'stats': stats,
+        'top_services': top_services,
         'active_departments': active_departments,
         'best_department': best_department,
         'worst_department': worst_department,
         'dept_stats': ranked_departments,
         'recent_complaints': recent_serialized,
-    }
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    })
 
 
 @public_bp.route('/api/chart/monthly')
@@ -914,11 +907,6 @@ def get_monthly_chart_data():
         filters = _parse_dashboard_filters(default_month_window=True)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
-
-    cache_key = ('chart_monthly', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
 
     base_query = _apply_dashboard_filters(
         Complaint.query,
@@ -937,9 +925,7 @@ def get_monthly_chart_data():
         labels.append(month_start.strftime('%b %Y'))
         data.append(count)
 
-    payload = {'labels': labels, 'data': data}
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    return _no_cache_json({'labels': labels, 'data': data})
 
 
 @public_bp.route('/api/chart/dept')
@@ -950,38 +936,27 @@ def get_dept_chart_data():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    cache_key = ('chart_dept', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
     departments_query = Department.query.order_by(Department.name.asc())
     if filters.get('department_id'):
         departments_query = departments_query.filter(Department.id == filters['department_id'])
     departments = departments_query.all()
 
-    counts = _apply_dashboard_filters(
-        db.session.query(
-            Complaint.department_id,
-            func.count(Complaint.id).label('total')
-        ),
-        filters,
-        include_time_window=True
-    ).group_by(Complaint.department_id).all()
-    counts_by_department = {int(row.department_id): int(row.total or 0) for row in counts}
-
     labels = []
     data = []
+    
     for dept in departments:
+        count = _apply_dashboard_filters(
+            Complaint.query.filter(Complaint.department_id == dept.id),
+            filters,
+            include_time_window=True
+        ).count()
         labels.append(dept.name)
-        data.append(counts_by_department.get(int(dept.id), 0))
-
-    payload = {
+        data.append(count)
+    
+    return _no_cache_json({
         'labels': labels,
         'data': data
-    }
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    })
 
 
 @public_bp.route('/api/chart/status')
@@ -992,30 +967,23 @@ def get_status_chart_data():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    cache_key = ('chart_status', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    grouped_rows = _apply_dashboard_filters(
-        db.session.query(
-            Complaint.status,
-            func.count(Complaint.id).label('total')
-        ),
+    base_query = _apply_dashboard_filters(
+        Complaint.query,
         filters,
         include_time_window=True
-    ).group_by(Complaint.status).all()
+    )
 
     statuses = DASHBOARD_STATUSES
-    grouped_lookup = {row.status: int(row.total or 0) for row in grouped_rows}
-    data = [grouped_lookup.get(status, 0) for status in statuses]
-
-    payload = {
+    data = []
+    
+    for status in statuses:
+        count = base_query.filter(Complaint.status == status).count()
+        data.append(count)
+    
+    return _no_cache_json({
         'labels': statuses,
         'data': data
-    }
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    })
 
 
 @public_bp.route('/api/chart/resolution-time')
@@ -1025,11 +993,6 @@ def get_resolution_time_chart_data():
         filters = _parse_dashboard_filters(default_month_window=True)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
-
-    cache_key = ('chart_resolution_time', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
 
     base_query = _apply_dashboard_filters(
         Complaint.query.filter(Complaint.resolved_at.isnot(None)),
@@ -1053,9 +1016,7 @@ def get_resolution_time_chart_data():
         labels.append(month_start.strftime('%b %Y'))
         values.append(avg_hours)
 
-    payload = {'labels': labels, 'data': values}
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    return _no_cache_json({'labels': labels, 'data': values})
 
 
 @public_bp.route('/api/chart/sla-compliance')
@@ -1065,11 +1026,6 @@ def get_sla_compliance_chart_data():
         filters = _parse_dashboard_filters(default_month_window=True)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
-
-    cache_key = ('chart_sla_compliance', _filters_cache_key(filters))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return jsonify(cached)
 
     base_query = _apply_dashboard_filters(
         Complaint.query.filter(Complaint.resolved_at.isnot(None)),
@@ -1091,9 +1047,7 @@ def get_sla_compliance_chart_data():
         labels.append(month_start.strftime('%b %Y'))
         values.append(compliance)
 
-    payload = {'labels': labels, 'data': values}
-    _cache_set(cache_key, payload, _cache_ttl())
-    return jsonify(payload)
+    return _no_cache_json({'labels': labels, 'data': values})
 
 
 @public_bp.route('/api/public/data')
@@ -1168,22 +1122,32 @@ def export_monthly_csv():
 def get_geo_heatmap_data():
     """Return geo-tagged complaint points for heatmap rendering."""
     maybe_run_sla_escalations()
-    requested_limit = request.args.get('limit', type=int)
+    try:
+        geo_filters = _parse_geo_filters()
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    requested_limit = geo_filters['limit']
     max_points = int(current_app.config.get('GEO_HEATMAP_MAX_POINTS', 2500))
-    if requested_limit is None or requested_limit <= 0:
-        requested_limit = max_points
-    requested_limit = min(requested_limit, max_points * 2)
 
-    cache_key = ('geo_heatmap', int(requested_limit))
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return _json_no_store(cached)
-
-    complaints = Complaint.query.filter(
+    query = Complaint.query.filter(
         Complaint.location_lat.isnot(None),
         Complaint.location_lng.isnot(None)
-    ).order_by(Complaint.submitted_at.desc()).limit(requested_limit).all()
-    payload = [
+    )
+
+    if geo_filters.get('status'):
+        query = query.filter(Complaint.status == geo_filters['status'])
+    if geo_filters.get('priority'):
+        query = query.filter(Complaint.priority == geo_filters['priority'])
+    if geo_filters.get('state'):
+        query = query.filter(Complaint.state == geo_filters['state'])
+    if geo_filters.get('district'):
+        query = query.filter(Complaint.district == geo_filters['district'])
+    if geo_filters.get('city'):
+        query = query.filter(Complaint.city == geo_filters['city'])
+
+    complaints = query.order_by(Complaint.submitted_at.desc()).limit(requested_limit).all()
+    return _no_cache_json([
         {
             'lat': complaint.location_lat,
             'lng': complaint.location_lng,
@@ -1195,9 +1159,7 @@ def get_geo_heatmap_data():
             'city': complaint.city,
             'submitted_at': complaint.submitted_at.isoformat() if complaint.submitted_at else None
         } for complaint in complaints
-    ]
-    _cache_set(cache_key, payload, _cache_ttl(0.2))
-    return _json_no_store(payload)
+    ])
 
 
 @public_bp.route('/api/ai/assist', methods=['POST'])
@@ -1330,9 +1292,3 @@ def health_check():
             'error': str(e),
             'timestamp': datetime.utcnow().isoformat()
         }), 503
-
-
-@public_bp.route('/api/health')
-def api_health_check():
-    """Backward-compatible JSON health endpoint."""
-    return health_check()
