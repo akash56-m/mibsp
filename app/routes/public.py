@@ -18,6 +18,7 @@ from app.utils import (
     generate_tracking_id, save_uploaded_file, 
     validate_tracking_id, log_action, analyze_complaint_text, maybe_run_sla_escalations
 )
+from app.tasks import send_complaint_submission_notification
 
 public_bp = Blueprint('public', __name__)
 _ai_rate_lock = threading.Lock()
@@ -323,6 +324,80 @@ def _apply_dashboard_filters(query, filters, date_field=Complaint.submitted_at, 
         )
 
     return query
+
+
+def _tokenize_for_classification(text):
+    """Tokenize free-form text for lightweight classifier matching."""
+    cleaned = ''.join(ch.lower() if ch.isalnum() else ' ' for ch in (text or ''))
+    return {token for token in cleaned.split() if len(token) >= 3}
+
+
+def _score_text_overlap(text_tokens, candidate_tokens):
+    """Compute a simple overlap score between two token sets."""
+    if not text_tokens or not candidate_tokens:
+        return 0
+    return len(text_tokens.intersection(candidate_tokens))
+
+
+def _predict_department_and_service(description):
+    """
+    Predict department/service using deterministic keyword matching.
+    Designed as an explainable fallback even without external AI APIs.
+    """
+    description_tokens = _tokenize_for_classification(description)
+    if not description_tokens:
+        return {
+            'department_id': None,
+            'department_name': None,
+            'service_id': None,
+            'service_name': None,
+            'confidence': 0
+        }
+
+    analysis = analyze_complaint_text(description)
+    category_hint = (analysis.get('category') or '').lower()
+
+    services = Service.query.options(joinedload(Service.department)).all()
+    best = None
+    best_score = 0
+
+    for service in services:
+        dept_name = service.department.name if service.department else ''
+        candidate_text = f'{service.name} {service.description or ""} {dept_name}'
+        candidate_tokens = _tokenize_for_classification(candidate_text)
+
+        score = _score_text_overlap(description_tokens, candidate_tokens)
+        if category_hint:
+            if category_hint in (dept_name or '').lower():
+                score += 3
+            if category_hint in (service.name or '').lower():
+                score += 2
+
+        # Reward direct service-name mentions.
+        service_name_tokens = _tokenize_for_classification(service.name or '')
+        score += _score_text_overlap(description_tokens, service_name_tokens) * 2
+
+        if score > best_score:
+            best_score = score
+            best = service
+
+    if not best or best_score <= 0:
+        return {
+            'department_id': None,
+            'department_name': None,
+            'service_id': None,
+            'service_name': None,
+            'confidence': 0
+        }
+
+    confidence = min(100, 35 + (best_score * 8))
+    return {
+        'department_id': best.department_id,
+        'department_name': best.department.name if best.department else None,
+        'service_id': best.id,
+        'service_name': best.name,
+        'confidence': confidence
+    }
 
 
 def _compute_dashboard_stats(filters):
@@ -642,6 +717,9 @@ def submit_complaint():
             
             db.session.add(complaint)
             db.session.commit()
+
+            # Notify internal staff channels (email/SMS) when configured.
+            send_complaint_submission_notification(complaint.tracking_id)
             
             # Log the submission (anonymous - no user)
             log_action('COMPLAINT_SUBMITTED', 
@@ -1268,6 +1346,39 @@ def ai_assist():
             assistant_mode, message, description, department_name, service_name
         )
         return jsonify({'reply': fallback, 'fallback': True}), 200
+
+
+@public_bp.route('/api/ai/classify', methods=['POST'])
+def ai_classify():
+    """
+    Lightweight AI classification endpoint.
+    Suggests department/service and urgency signals before submission.
+    """
+    if not request.is_json:
+        return jsonify({'error': 'JSON request body required.'}), 400
+
+    payload = request.get_json(silent=True) or {}
+    description = (payload.get('description') or '').strip()
+
+    if len(description) < 20:
+        return jsonify({'error': 'Please provide at least 20 characters for classification.'}), 400
+    if len(description) > 5000:
+        return jsonify({'error': 'Description is too long. Keep it under 5000 characters.'}), 400
+
+    analysis = analyze_complaint_text(description)
+    prediction = _predict_department_and_service(description)
+
+    return _no_cache_json({
+        'priority': analysis.get('priority'),
+        'urgent': bool(analysis.get('urgent')),
+        'sentiment': analysis.get('sentiment'),
+        'category': analysis.get('category'),
+        'department_id': prediction.get('department_id'),
+        'department_name': prediction.get('department_name'),
+        'service_id': prediction.get('service_id'),
+        'service_name': prediction.get('service_name'),
+        'confidence': prediction.get('confidence', 0)
+    })
 
 
 # =============================================================================

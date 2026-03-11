@@ -68,10 +68,21 @@ class Config:
     ADMIN_EMAIL_2FA_ENABLED = os.environ.get('ADMIN_EMAIL_2FA_ENABLED', 'false').lower() in ['true', 'on', '1']
     ADMIN_OTP_EXPIRY_MINUTES = int(os.environ.get('ADMIN_OTP_EXPIRY_MINUTES', 5))
     ADMIN_OTP_LENGTH = int(os.environ.get('ADMIN_OTP_LENGTH', 6))
+    LOGIN_RATE_LIMIT_ENABLED = os.environ.get('LOGIN_RATE_LIMIT_ENABLED', 'true').lower() in ['true', 'on', '1']
+    LOGIN_RATE_WINDOW_SECONDS = int(os.environ.get('LOGIN_RATE_WINDOW_SECONDS', 300))
+    LOGIN_RATE_MAX_ATTEMPTS_PER_IP = int(os.environ.get('LOGIN_RATE_MAX_ATTEMPTS_PER_IP', 25))
+    LOGIN_RATE_MIN_INTERVAL_SECONDS = int(os.environ.get('LOGIN_RATE_MIN_INTERVAL_SECONDS', 1))
+
+    # Optional SMS notifications (Twilio REST)
+    SMS_ENABLED = os.environ.get('SMS_ENABLED', 'false').lower() in ['true', 'on', '1']
+    SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'twilio').strip().lower()
+    TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+    TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+    TWILIO_FROM_NUMBER = os.environ.get('TWILIO_FROM_NUMBER')
+    SMS_NOTIFICATION_TO = os.environ.get('SMS_NOTIFICATION_TO')
 
     # Runtime performance guard for SLA recalculation on read-heavy pages
-    SLA_CHECK_INTERVAL_SECONDS = int(os.environ.get('SLA_CHECK_INTERVAL_SECONDS', 45))
-    API_RESPONSE_CACHE_TTL_SECONDS = int(os.environ.get('API_RESPONSE_CACHE_TTL_SECONDS', 12))
+    SLA_CHECK_INTERVAL_SECONDS = int(os.environ.get('SLA_CHECK_INTERVAL_SECONDS', 20))
     
     @staticmethod
     def init_app(app):
@@ -104,6 +115,7 @@ class TestingConfig(Config):
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     WTF_CSRF_ENABLED = False  # Disable CSRF for testing
     SLA_CHECK_INTERVAL_SECONDS = 0  # Always run in tests for determinism
+    LOGIN_RATE_LIMIT_ENABLED = False
     
     # Use temporary upload folder for tests
     UPLOAD_FOLDER = '/tmp/mibsp_test_uploads'

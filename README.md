@@ -441,3 +441,9 @@ For support, email support@mibsp.gov.in or open an issue on GitHub.
 ---
 
 **Made with ❤️ for transparent governance**
+
+## Viva Documentation Diagrams
+
+For final-year project presentation materials (3-tier architecture, ER diagram, sequence flow, threat model, deployment architecture), see:
+
+- `docs/PROJECT_DIAGRAMS.md`

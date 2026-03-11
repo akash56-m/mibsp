@@ -4,6 +4,9 @@ Login, logout, and session management.
 """
 import secrets
 import string
+import time
+import threading
+from collections import deque
 from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlparse
 from flask import Blueprint, render_template, request, flash, redirect, url_for, session, current_app
@@ -15,6 +18,8 @@ from app.utils import log_action, login_required
 from app.tasks import send_system_email
 
 auth_bp = Blueprint('auth', __name__)
+_login_rate_lock = threading.Lock()
+_login_rate_buckets = {}
 
 
 def _resolve_next_target():
@@ -51,6 +56,56 @@ def _clear_pending_otp():
     session.pop('pending_otp_next', None)
 
 
+def _get_client_ip():
+    """Resolve originating IP for login rate limiting."""
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.remote_addr or 'unknown'
+
+
+def _enforce_login_rate_limit():
+    """Apply lightweight per-IP login throttling."""
+    if not current_app.config.get('LOGIN_RATE_LIMIT_ENABLED', True):
+        return True, None
+
+    min_interval = int(current_app.config.get('LOGIN_RATE_MIN_INTERVAL_SECONDS', 1))
+    window_seconds = int(current_app.config.get('LOGIN_RATE_WINDOW_SECONDS', 300))
+    max_requests = int(current_app.config.get('LOGIN_RATE_MAX_ATTEMPTS_PER_IP', 25))
+    client_ip = _get_client_ip()
+    now_ts = time.time()
+
+    with _login_rate_lock:
+        bucket = _login_rate_buckets.get(client_ip)
+        if bucket is None:
+            bucket = {'last_ts': 0.0, 'hits': deque()}
+            _login_rate_buckets[client_ip] = bucket
+
+        if now_ts - bucket['last_ts'] < min_interval:
+            return False, 'Please wait a moment before trying to log in again.'
+
+        hits = bucket['hits']
+        while hits and now_ts - hits[0] > window_seconds:
+            hits.popleft()
+
+        if len(hits) >= max_requests:
+            return False, 'Too many login attempts from this network. Please try again later.'
+
+        hits.append(now_ts)
+        bucket['last_ts'] = now_ts
+
+        if len(_login_rate_buckets) > 5000:
+            stale_cutoff = now_ts - (window_seconds * 2)
+            stale = [
+                ip for ip, data in _login_rate_buckets.items()
+                if not data['hits'] or data['hits'][-1] < stale_cutoff
+            ]
+            for ip in stale[:1000]:
+                _login_rate_buckets.pop(ip, None)
+
+    return True, None
+
+
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """
@@ -67,6 +122,12 @@ def login():
     next_page = _resolve_next_target()
 
     if request.method == 'POST':
+        allowed, rate_message = _enforce_login_rate_limit()
+        if not allowed:
+            flash(rate_message, 'danger')
+            log_action('LOGIN_RATE_LIMITED', details={'username': request.form.get('username', '').strip()})
+            return render_template('auth/login.html', next=next_page)
+
         _clear_pending_otp()
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
@@ -165,12 +226,6 @@ def login():
                 flash('Invalid username or password.', 'danger')
 
     return render_template('auth/login.html', next=next_page)
-
-
-@auth_bp.route('/admin/login')
-def legacy_admin_login_redirect():
-    """Compatibility route for older /admin/login bookmarks."""
-    return redirect(url_for('auth.login', next=_resolve_next_target()))
 
 
 @auth_bp.route('/verify-otp', methods=['GET', 'POST'])

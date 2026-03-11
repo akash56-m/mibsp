@@ -189,6 +189,59 @@
                 </div>
             </div>
         </div>
+
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-medal me-2 text-primary"></i>Officer Performance Index</h5>
+                <a href="{{ url_for('admin.get_officer_performance') }}" class="btn btn-sm btn-outline-primary">JSON</a>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0 table-sm mobile-data-table">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Officer</th>
+                                <th>Role</th>
+                                <th>Handled</th>
+                                <th>Closed</th>
+                                <th class="d-none d-lg-table-cell">Avg Resolution (hrs)</th>
+                                <th class="d-none d-lg-table-cell">Avg Rating</th>
+                                <th>Performance Index</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for officer in top_officers %}
+                            <tr>
+                                <td data-label="Officer"><strong>{{ officer.username }}</strong></td>
+                                <td data-label="Role"><span class="badge bg-info">{{ officer.role }}</span></td>
+                                <td data-label="Handled">{{ officer.handled }}</td>
+                                <td data-label="Closed">{{ officer.closed }}</td>
+                                <td data-label="Avg Resolution (hrs)" class="d-none d-lg-table-cell">
+                                    {% if officer.avg_resolution_hours is not none %}
+                                        {{ officer.avg_resolution_hours }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td data-label="Avg Rating" class="d-none d-lg-table-cell">
+                                    {% if officer.avg_rating is not none %}
+                                        {{ officer.avg_rating }}/5
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td data-label="Performance Index"><strong>{{ officer.performance_index }}</strong></td>
+                            </tr>
+                            {% else %}
+                            <tr class="table-empty-state">
+                                <td colspan="7" class="text-center py-4 text-muted">No active officer records available.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
         
         <div class="row g-4">
             <!-- Recent Complaints -->

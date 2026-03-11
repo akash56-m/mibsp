@@ -314,6 +314,35 @@ class TestAPIEndpoints:
         assert isinstance(data.get('reply'), str)
         assert data.get('reply')
 
+    def test_ai_classify_endpoint_returns_prediction(self, client):
+        """AI classify endpoint should return category and service suggestion payload."""
+        dept = Department(name='Water Supply', description='Water services')
+        db.session.add(dept)
+        db.session.commit()
+
+        service = Service(
+            name='Water Leakage Repair',
+            description='Leakage and broken pipeline repair',
+            department_id=dept.id
+        )
+        db.session.add(service)
+        db.session.commit()
+
+        response = client.post('/api/ai/classify', json={
+            'description': 'There is a serious water leakage from the municipal pipeline for two days.'
+        })
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload.get('priority') in ['Normal', 'High']
+        assert 'sentiment' in payload
+        assert payload.get('service_name') == 'Water Leakage Repair'
+        assert payload.get('department_name') == 'Water Supply'
+
+    def test_ai_classify_requires_minimum_description(self, client):
+        """AI classify endpoint should reject very short descriptions."""
+        response = client.post('/api/ai/classify', json={'description': 'too short'})
+        assert response.status_code == 400
+
     def test_sla_escalation_runs_on_stats_api(self, client, sample_data):
         """Stats API should trigger SLA escalation for overdue complaints."""
         complaint = Complaint(

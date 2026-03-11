@@ -137,6 +137,19 @@
                         </ul>
                     </div>
                 </div>
+                <div class="card shadow-sm border-0 mb-3">
+                    <div class="card-header bg-white py-3">
+                        <h6 class="mb-0"><i class="fas fa-location-crosshairs me-2 text-primary"></i>Ward/Area Hotspots</h6>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled small mb-0" id="hotspotStats">
+                            <li class="geo-stat-row">
+                                <span class="text-muted">No filtered geo data yet</span>
+                                <strong>-</strong>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
                 <div class="card shadow-sm border-0">
                     <div class="card-header bg-white py-3">
                         <h6 class="mb-0"><i class="fas fa-circle-info me-2 text-primary"></i>Map Legend</h6>
@@ -195,6 +208,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const statHigh = document.getElementById('statHigh');
     const statDelayed = document.getElementById('statDelayed');
     const statClosed = document.getElementById('statClosed');
+    const hotspotStats = document.getElementById('hotspotStats');
 
     const statusColors = {
         'Pending': '#f59e0b',
@@ -411,6 +425,38 @@ document.addEventListener('DOMContentLoaded', function() {
             : `${base} Filters: None`;
     }
 
+    function updateHotspotStats(points) {
+        if (!hotspotStats) {
+            return;
+        }
+        if (!Array.isArray(points) || !points.length) {
+            hotspotStats.innerHTML = `
+                <li class="geo-stat-row">
+                    <span class="text-muted">No filtered geo data yet</span>
+                    <strong>-</strong>
+                </li>
+            `;
+            return;
+        }
+
+        const areaCounts = new Map();
+        points.forEach((point) => {
+            const areaName = `${point.city}, ${point.district}`.replace(/^Unspecified,\s*/, '');
+            areaCounts.set(areaName, (areaCounts.get(areaName) || 0) + 1);
+        });
+
+        const topAreas = Array.from(areaCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+
+        hotspotStats.innerHTML = topAreas.map((entry) => (
+            `<li class="geo-stat-row">`
+            + `<span class="text-muted text-truncate" style="max-width: 170px;">${entry[0]}</span>`
+            + `<strong>${entry[1]}</strong>`
+            + `</li>`
+        )).join('');
+    }
+
     function resetFilters() {
         statusFilter.value = 'all';
         priorityFilter.value = 'all';
@@ -459,6 +505,7 @@ document.addEventListener('DOMContentLoaded', function() {
             statHigh.textContent = '0';
             statDelayed.textContent = '0';
             statClosed.textContent = '0';
+            updateHotspotStats([]);
             updateActiveFilterSummary(0);
             setState('No geo-tagged complaints available yet.', true);
             return;
@@ -538,6 +585,7 @@ document.addEventListener('DOMContentLoaded', function() {
         statHigh.textContent = highCount;
         statDelayed.textContent = delayedCount;
         statClosed.textContent = closedCount;
+        updateHotspotStats(filtered);
         updateActiveFilterSummary(filtered.length);
 
         if (!filtered.length) {
@@ -603,6 +651,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     statHigh.textContent = '0';
                     statDelayed.textContent = '0';
                     statClosed.textContent = '0';
+                    updateHotspotStats([]);
                     updateActiveFilterSummary(0);
                     setState('No geo-tagged complaints available yet.', true);
                     return;

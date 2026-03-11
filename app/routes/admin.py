@@ -16,19 +16,48 @@ from app.tasks import send_status_update_notification
 
 admin_bp = Blueprint('admin', __name__)
 
-@admin_bp.route('')
-@admin_bp.route('/')
-@admin_required
-def admin_root():
-    """Compatibility root admin entrypoint."""
-    return redirect(url_for('admin.dashboard'))
 
+def _build_officer_performance_records(limit=None):
+    """Calculate officer performance index records."""
+    officers = User.query.filter(
+        User.role.in_(['officer', 'zonal_officer', 'commissioner']),
+        User.is_active.is_(True)
+    ).all()
 
-@admin_bp.route('/login')
-def legacy_admin_login():
-    """Compatibility route for legacy /admin/login bookmarks."""
-    next_page = request.args.get('next', '')
-    return redirect(url_for('auth.login', next=next_page))
+    records = []
+    for officer in officers:
+        handled = Complaint.query.filter_by(assigned_to=officer.id).all()
+        total = len(handled)
+        closed = [c for c in handled if c.status == 'Closed']
+        avg_hours = None
+        if closed:
+            avg_hours = sum(c.get_resolution_time() or 0 for c in closed) / len(closed)
+        rated = [c.citizen_rating for c in closed if c.citizen_rating]
+        avg_rating = (sum(rated) / len(rated)) if rated else 0
+        speed_component = 0
+        if avg_hours is not None:
+            speed_component = max(0, 100 - min(avg_hours, 100))
+        closure_component = (len(closed) / total * 100) if total else 0
+        rating_component = (avg_rating / 5 * 100) if rated else 0
+        performance_index = round(
+            (speed_component * 0.4) + (closure_component * 0.4) + (rating_component * 0.2),
+            2
+        )
+
+        records.append({
+            'username': officer.username,
+            'role': officer.role,
+            'handled': total,
+            'closed': len(closed),
+            'avg_resolution_hours': round(avg_hours, 2) if avg_hours is not None else None,
+            'avg_rating': round(avg_rating, 2) if rated else None,
+            'performance_index': performance_index
+        })
+
+    records.sort(key=lambda r: r['performance_index'], reverse=True)
+    if isinstance(limit, int) and limit > 0:
+        return records[:limit]
+    return records
 
 
 # =============================================================================
@@ -59,6 +88,7 @@ def dashboard():
     recent_logs = AuditLog.query.order_by(
         AuditLog.timestamp.desc()
     ).limit(10).all()
+    top_officers = _build_officer_performance_records(limit=8)
     
     # Department performance
     departments = Department.query.all()
@@ -99,7 +129,8 @@ def dashboard():
                           total_departments=total_departments,
                           recent_complaints=recent_complaints,
                           recent_logs=recent_logs,
-                          dept_performance=dept_performance)
+                          dept_performance=dept_performance,
+                          top_officers=top_officers)
 
 
 # =============================================================================
@@ -721,40 +752,7 @@ def get_service_trends():
 @admin_required
 def get_officer_performance():
     """Officer performance index by workload, speed, and citizen ratings."""
-    officers = User.query.filter(
-        User.role.in_(['officer', 'zonal_officer', 'commissioner']),
-        User.is_active.is_(True)
-    ).all()
-
-    records = []
-    for officer in officers:
-        handled = Complaint.query.filter_by(assigned_to=officer.id).all()
-        total = len(handled)
-        closed = [c for c in handled if c.status == 'Closed']
-        avg_hours = None
-        if closed:
-            avg_hours = sum(c.get_resolution_time() or 0 for c in closed) / len(closed)
-        rated = [c.citizen_rating for c in closed if c.citizen_rating]
-        avg_rating = (sum(rated) / len(rated)) if rated else 0
-        speed_component = 0
-        if avg_hours is not None:
-            speed_component = max(0, 100 - min(avg_hours, 100))
-        closure_component = (len(closed) / total * 100) if total else 0
-        rating_component = (avg_rating / 5 * 100) if rated else 0
-        performance_index = round((speed_component * 0.4) + (closure_component * 0.4) + (rating_component * 0.2), 2)
-
-        records.append({
-            'username': officer.username,
-            'role': officer.role,
-            'handled': total,
-            'closed': len(closed),
-            'avg_resolution_hours': round(avg_hours, 2) if avg_hours is not None else None,
-            'avg_rating': round(avg_rating, 2) if rated else None,
-            'performance_index': performance_index
-        })
-
-    records.sort(key=lambda r: r['performance_index'], reverse=True)
-    return jsonify(records)
+    return jsonify(_build_officer_performance_records())
 
 
 @admin_bp.route('/export/complaints.csv')

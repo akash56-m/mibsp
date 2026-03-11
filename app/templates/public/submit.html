@@ -91,6 +91,17 @@
                                         <div class="form-text">Services load automatically after department selection.</div>
                                     </div>
                                 </div>
+                                <div class="mt-3">
+                                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                                        <button type="button" class="btn btn-outline-primary btn-sm" id="aiClassifyBtn">
+                                            <i class="fas fa-brain me-1"></i>Auto Classify Department/Service
+                                        </button>
+                                        <button type="button" class="btn btn-outline-success btn-sm d-none" id="aiApplySuggestionBtn">
+                                            <i class="fas fa-check me-1"></i>Apply Suggestion
+                                        </button>
+                                    </div>
+                                    <div id="aiClassifyResult" class="alert alert-info py-2 px-3 small mt-2 d-none"></div>
+                                </div>
                             </section>
 
                             <section class="submit-block mb-4" data-reveal>
@@ -291,6 +302,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const aiResponse = document.getElementById('aiResponse');
     const aiError = document.getElementById('aiError');
     const useAiDraftBtn = document.getElementById('useAiDraftBtn');
+    const aiClassifyBtn = document.getElementById('aiClassifyBtn');
+    const aiApplySuggestionBtn = document.getElementById('aiApplySuggestionBtn');
+    const aiClassifyResult = document.getElementById('aiClassifyResult');
     const locateBtn = document.getElementById('locateBtn');
     const locationLat = document.getElementById('location_lat');
     const locationLng = document.getElementById('location_lng');
@@ -300,6 +314,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const summaryLength = document.getElementById('summaryLength');
     const summaryCompletion = document.getElementById('summaryCompletion');
     const summaryProgressBar = document.getElementById('summaryProgressBar');
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let latestClassification = null;
 
     function updateDescriptionProgress() {
         const length = description.value.length;
@@ -377,6 +393,95 @@ document.addEventListener('DOMContentLoaded', function() {
         aiError.textContent = '';
     }
 
+    function showClassificationMessage(message, isError = false) {
+        if (!aiClassifyResult) {
+            return;
+        }
+        aiClassifyResult.classList.remove('d-none', 'alert-danger', 'alert-info', 'alert-success');
+        aiClassifyResult.classList.add(isError ? 'alert-danger' : 'alert-info');
+        aiClassifyResult.textContent = message;
+    }
+
+    function hideClassificationMessage() {
+        if (!aiClassifyResult) {
+            return;
+        }
+        aiClassifyResult.classList.add('d-none');
+        aiClassifyResult.textContent = '';
+        aiClassifyResult.classList.remove('alert-danger', 'alert-info', 'alert-success');
+    }
+
+    function applyClassificationSuggestion() {
+        if (!latestClassification || !latestClassification.department_id || !latestClassification.service_id) {
+            showClassificationMessage('No valid AI suggestion is available to apply.', true);
+            return;
+        }
+
+        departmentSelect.value = String(latestClassification.department_id);
+        loadServicesForDepartment(latestClassification.department_id, latestClassification.service_id);
+        updateSubmissionSummary();
+
+        aiClassifyResult.classList.remove('alert-info', 'alert-danger');
+        aiClassifyResult.classList.add('alert-success');
+        aiClassifyResult.textContent = 'AI suggestion applied to Department and Service.';
+        if (aiApplySuggestionBtn) {
+            aiApplySuggestionBtn.classList.add('d-none');
+        }
+    }
+
+    async function runClassification() {
+        hideClassificationMessage();
+        latestClassification = null;
+        if (aiApplySuggestionBtn) {
+            aiApplySuggestionBtn.classList.add('d-none');
+        }
+
+        const text = description.value.trim();
+        if (text.length < 20) {
+            showClassificationMessage('Write at least 20 characters in description before auto classification.', true);
+            description.focus();
+            return;
+        }
+
+        aiClassifyBtn.disabled = true;
+        aiClassifyBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Classifying...';
+        try {
+            const response = await fetch('/api/ai/classify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({ description: text })
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+                showClassificationMessage(payload.error || 'Unable to classify complaint right now.', true);
+                return;
+            }
+
+            latestClassification = payload;
+            const suggestedDept = payload.department_name || 'Not confident';
+            const suggestedService = payload.service_name || 'Not confident';
+            const confidence = Number(payload.confidence || 0);
+            const urgency = payload.urgent ? 'High priority' : 'Normal priority';
+            showClassificationMessage(
+                `Suggestion: ${suggestedDept} -> ${suggestedService} | ` +
+                `Confidence: ${confidence}% | ${urgency} | Sentiment: ${payload.sentiment || 'neutral'}`
+            );
+
+            if (payload.department_id && payload.service_id && aiApplySuggestionBtn) {
+                aiApplySuggestionBtn.classList.remove('d-none');
+            }
+        } catch (error) {
+            console.error('Classification error:', error);
+            showClassificationMessage('Unable to connect to auto-classification service.', true);
+        } finally {
+            aiClassifyBtn.disabled = false;
+            aiClassifyBtn.innerHTML = '<i class="fas fa-brain me-1"></i>Auto Classify Department/Service';
+        }
+    }
+
     aiAskBtn.addEventListener('click', async function() {
         hideAiError();
         const promptText = aiPrompt.value.trim();
@@ -390,7 +495,6 @@ document.addEventListener('DOMContentLoaded', function() {
         aiAskBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Thinking...';
 
         try {
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
             const response = await fetch('/api/ai/assist', {
                 method: 'POST',
                 headers: {
@@ -433,6 +537,13 @@ document.addEventListener('DOMContentLoaded', function() {
         description.dispatchEvent(new Event('input'));
         description.focus();
     });
+
+    if (aiClassifyBtn) {
+        aiClassifyBtn.addEventListener('click', runClassification);
+    }
+    if (aiApplySuggestionBtn) {
+        aiApplySuggestionBtn.addEventListener('click', applyClassificationSuggestion);
+    }
 
     locateBtn.addEventListener('click', function() {
         if (!navigator.geolocation) {
